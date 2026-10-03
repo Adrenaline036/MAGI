@@ -1,0 +1,43 @@
+{
+  "name": "dsh-collabridge",
+  "version": "0.6.0",
+  "private": true,
+  "description": "Deliver an external question (from Codex) into a live DeepSeek Harness collaboration session, routed by project and development node",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "mcp",
+    "codex",
+    "agent-collaboration",
+    "code-review"
+  ],
+  "homepage": "https://github.com/Adrenaline036/Collabridge#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Adrenaline036/Collabridge.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Adrenaline036/Collabridge/issues"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./routing": "./lib/routing.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "ARCHITECTURE.md",
+    "OPERATIONS.md"
+  ],
+  "license": "MIT"
+}

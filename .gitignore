@@ -1,0 +1,15 @@
+# build output and package artifacts
+*.tgz
+node_modules/
+
+# review and test scratch
+.dsh-review/
+reviews/
+*.log
+*.log.jsonl
+
+# editor and OS noise
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
