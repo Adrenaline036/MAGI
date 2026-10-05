@@ -26,18 +26,42 @@ agent.inject(message)     placed into the current context
 A cold or closed target is **refused**, never silently started: the response carries
 `target_not_live` plus the list of live sessions so the caller can re-route.
 
-## Routing: project + node
+## Routing: project, then one conversation inside it
 
 The registry is **state, not per-call input**. A project points at a *current node*, and a
 node points at a *session*. Crossing a milestone means updating one field; every later
 question from that project follows automatically.
 
+When one workspace holds several conversations at once, a question can name its target instead of
+following the project's current node. Three selectors, most explicit first:
+
+| Selector | Meaning |
+|---|---|
+| `session` | a session id, or a unique prefix of one |
+| `node` | a route label registered for the project |
+| `title` | the title the target conversation shows in its window, or a distinctive part of it |
+
 Resolution order:
 
-1. `routes[project.node]` — explicit route for the current node
-2. `routes.default` — explicit fallback
-3. newest session whose workspace slug matches the project — **zero configuration**
-4. unresolved — reported, never guessed
+1. `session` — exact id, else a unique id prefix
+2. `node` — a registered label; an unregistered label is refused, never redirected
+3. `title` — an exact title, else a title containing the text if it is the only one
+4. `routes[project.node]` — explicit route for the current node
+5. `routes.default` — explicit fallback
+6. newest conversation whose workspace slug matches the project — **zero configuration**
+7. unresolved — reported, never guessed
+
+A selector that matches nothing, or more than one conversation, is **refused with the candidate list**
+rather than guessed at, and a title that names a conversation which is not live is refused distinctly
+instead of falling back to the project default.
+
+Titles come from the durable `session/title` event the host writes into each log (the latest one, which
+is what the window shows). `GET /sessions?project=<path>` lists a workspace's conversations with that
+title, when each was last written to, whether it is live, and the last thing the user said in it.
+
+Recency for rule 6 is the newest **file** inside the session directory. The directory's own mtime only
+moves when entries are added or removed, so a conversation running for days used to report its creation
+moment and rule 6 could pick a stale target.
 
 Registry file: `$DSH_HOME/collab-routing.json` (override with `DSH_COLLAB_ROUTING`).
 
@@ -59,6 +83,10 @@ Registry file: `$DSH_HOME/collab-routing.json` (override with `DSH_COLLAB_ROUTIN
 Switching a node is a handoff, not just a pointer change: the new session starts cold by
 design, so record what it needs before you switch.
 
+`POST /route` takes `current: false` to register a label **without** moving the project's current node.
+That is what labelling one of several parallel conversations needs; the default (`true`) keeps the
+milestone flow a single step.
+
 ## Endpoints
 
 Loopback only, `127.0.0.1`, ephemeral port, bearer token required except on `/health`.
@@ -66,14 +94,17 @@ Loopback only, `127.0.0.1`, ephemeral port, bearer token required except on `/he
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/health` | liveness, pid, live sessions, routing file path (no token) |
-| GET | `/sessions` | live root sessions with status and cwd |
+| GET | `/sessions` | live root sessions with status, cwd, title, last activity and the user's last line; add `?project=<path>` to list one workspace's conversations with liveness |
 | GET | `/routes` | the whole registry |
-| POST | `/route` | `{project, node?, session}` — register a route |
+| POST | `/route` | `{project, node?, session, current?}` — register a route |
 | POST | `/node` | `{project, node}` — switch the current node |
-| POST | `/ask` | `{project, question, mode?, codex_thread?}` — the admission call |
+| POST | `/ask` | `{project, question, mode?, codex_thread?, title?, node?, session?}` — the admission call |
 
-`/ask` returns `202` with `{question_id, session_id, project, node, resolved_by, mode}`, or
-`409` with a machine-readable code (`no_session_routed`, `target_not_live`) and a `hint`.
+`/ask` returns `202` with `{question_id, session_id, project, node, resolved_by, matched_title, mode}`, or
+`409` with a machine-readable code and a `hint`. Selector failures: `title_not_found`,
+`title_ambiguous`, `title_matched_but_not_live`, `node_not_routed`, `session_not_found`,
+`session_prefix_ambiguous`. Each carries the candidates it could have meant, so the caller can
+re-address instead of guessing.
 
 **Discovery**: `$DSH_HOME/collab-bridge.json` holds `{host, port, token, pid, started_at}`.
 It is written when the listener starts and removed on unload, so a stale endpoint cannot
@@ -102,10 +133,22 @@ Keep the tool call short: DSH replies in its own window, and the answer is pushe
 Codex thread as a `[DSH]`-marked message. Pass the project path and the question **verbatim**;
 the recipient sees exactly that text, so a rewritten question is a different question.
 
+Three optional arguments choose the conversation inside the project: `title` (the name its window
+shows), `node` (a registered label) and `session` (an id or unique id prefix). With none of them the
+project's registry decides, as before. A selector that matches nothing or several conversations is
+refused with the candidates, so the caller re-addresses instead of delivering to the wrong workstream.
+
+### `dsh_sessions` — what conversations exist here, read-only
+
+Lists one project's conversations with the title each shows, when each was last written to, whether it
+is live, and the last thing the user said in it. Call it before asking when a workspace has several
+conversations running, then pass the chosen title to `ask_dsh`.
+
 Both relayed messages read the same way, in both directions: **the relayed text comes first and
 the provenance block comes last.** The inbound delivery opens on the question (inside a
 `<<<QUESTION … >>>` fence), then the delivery contract, then a trailing `---` block carrying
-`[CODEX→DSH]` with the project, node, session, mode, question id and thread. The outbound push
+`[CODEX→DSH]` with the project, node, session, mode, question id and thread, plus a `定位方式` line
+naming the selector when the caller chose one. The outbound push
 opens on the answer itself, then a trailing `---` block carrying `[DSH] … 未经 Codex 改写` and the
 basis. A reader starting at the top therefore lands on the content, and a reader asking "who said
 this to whom, and was it rewritten?" finds the answer at the end rather than in front of the text.
@@ -157,20 +200,25 @@ fault:
 
 ```
 node lib/cli.mjs health
-node lib/cli.mjs sessions
+node lib/cli.mjs sessions [--project <path>]      # conversations with their titles and last activity
 node lib/cli.mjs routes
 node lib/cli.mjs route --project <path> --node <label> --session <id>
 node lib/cli.mjs node  --project <path> --node <label>
-node lib/cli.mjs ask   --project <path> --question-file <path> [--mode followup|steer|inject]
+node lib/cli.mjs label --as <name> [--current]    # run INSIDE a conversation: names it via DSH_SESSION_ID
+node lib/cli.mjs ask   --project <path> --question-file <path> [--mode followup|steer|inject] [--title <title>|--node <label>|--session <id>]
 ```
+
+`label` is how a conversation gets a name without anybody reading an id: `$DSH_SESSION_ID` is exported
+into every process a conversation starts, so the command registers that session under the given name in
+its own working directory. Without `--current` the project's current node is left alone.
 
 ## Verification
 
-`node --test test/bridge.test.mjs` — 158 checks, no DSH process and no cost. It drives the real
+`node --test test/bridge.test.mjs` — 202 checks, no DSH process and no cost. It drives the real
 `apply()` through a fake cordis context, so the real HTTP surface, routing, admission
 decision, refusal auditing and audit log all run; it also pins the message order of both relay
 directions (relayed text first, provenance block last) against `markAnswer()`. `node --test
-test/review-bridge.test.mjs` adds 231 checks over the reviewer prompt, the workflow script, the
+test/review-bridge.test.mjs` adds 243 checks over the reviewer prompt, the workflow script, the
 return validators and the session log readers.
 
 `test/selftest-in-dsh.mjs` — run inside a real DSH process (mounted with `--patch`) to prove
@@ -206,5 +254,5 @@ back with `codex queue` and consumed automatically.
 - **No push-back.** The plugin is inbound only. Getting the answer back into Codex needs
   `codex queue --thread <id>` on the coordinator's side; routing that reply needs the Codex
   thread id, which is not passed automatically.
-- **One loop bound is policy, not code.** Nothing here stops two agents from answering each
-  other indefinitely. Leave at least one human turn between pushes.
+- **Nothing here bounds a conversation loop.** Two agents can keep answering each other; the plugin
+  relays, it does not decide when to stop. Whoever drives the exchange decides that.

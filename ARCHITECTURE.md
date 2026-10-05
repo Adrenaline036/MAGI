@@ -61,6 +61,30 @@ edge whitespace does not weaken the binding.
 What was tolerated is recorded (`conductor_script_whitespace`) instead of being swallowed silently. A
 guard that relaxes without saying so stops being a guard.
 
+## 5. A workspace holds several conversations, so "the project" is not an address
+
+Routing began as project → conversation, which is enough while one workspace has one collaboration
+line. It stops being enough the moment two tasks run in parallel in the same workspace: both are the
+same project, so both resolve to the same conversation and the two workstreams collide.
+
+The address therefore has three forms, in order of explicitness: a session id, a label, or the title
+the conversation shows in its own window. The title is the one a person can actually use, and it is
+readable because the host writes it into the session log as a durable `session/title` event rather
+than keeping it in application state.
+
+Two consequences are deliberate:
+
+- **Naming a target that does not resolve is refused with the candidates**, never redirected to the
+  project's default. A question delivered to the wrong workstream is worse than one that has to be
+  re-addressed, and the caller can always choose from the list it gets back.
+- **A label is not a session id.** Ids are per-machine; labels are names people agree on. Registering
+  a label does not move the project's current node, because labelling one of several parallel
+  conversations must not silently re-point every later question.
+
+Recency is read from the newest file inside a session directory. The directory's own timestamp only
+moves when entries are added or removed, which made a long-running conversation look like the oldest
+one and let the zero-configuration fallback pick a stale target.
+
 ## Failure reporting
 
 Both halves report failures as named states rather than exceptions, because the states are read by

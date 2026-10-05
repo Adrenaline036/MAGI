@@ -65,17 +65,42 @@ profile's bundle list.
 profile that still lists that name must have its dependency, bundle entry and lock entries removed
 first: two installed copies would both mount a host half and fight over the same loopback port.
 
-## Routing: which DSH session gets the question
+## Routing: which conversation gets the question
 
-A question is addressed to a **project**, optionally at a **development node** (a milestone label such
-as `phase0` or `bridge-maintain`). Resolution order:
+A question is addressed to a **project**, and when that workspace holds several conversations at once,
+to one of them by name. The caller can name a target in three ways, and naming nothing keeps the older
+milestone behaviour.
 
-1. `routes[project][node]`
-2. `routes[project].default`
-3. the newest live session whose workspace slug matches the project
-4. unresolved, reported as such
+| Selector | What the caller passes | Typical use |
+|---|---|---|
+| `title` | The title the conversation shows in its own window, or a distinctive part of it | "route this to the conversation called 恢复 Ctrl+Enter 示例功能" |
+| `node` | A route label registered for the project | A milestone line, such as `phase0` or `bridge-maintain` |
+| `session` | A session id, or a unique prefix of it | When two conversations share a title |
 
-A session id is a per-machine fact. Never copy one between machines.
+Resolution order:
+
+1. `session` (exact id, else a unique id prefix)
+2. `node` (a registered label; an unregistered label is refused, not redirected)
+3. `title` (an exact title wins; otherwise a title containing the text wins if it is the only one)
+4. `routes[project.node]`
+5. `routes[project].default`
+6. the newest conversation of the workspace
+7. unresolved, reported as such
+
+Naming something that matches nothing, or more than one conversation, is **refused with the list of
+conversations** instead of being guessed at: a question delivered to the wrong conversation is worse
+than a question the caller has to re-address. A title that names a conversation which is no longer
+live is refused distinctly, rather than falling back to the project's default.
+
+Where a conversation's title comes from: the host writes it as a durable `session/title` event, first
+derived from the opening prompt and refined afterwards, so the latest one is what the window shows.
+`dsh_sessions` (or `collab-cli sessions`) lists the conversations of a workspace with their titles,
+when each was last written to, and the last thing the user said in it.
+
+The zero-configuration fallback matches a conversation by its workspace directory. Recency is taken
+from the newest file inside the session directory, not from the directory's own timestamp: the latter
+only moves when entries are added or removed, so a conversation running for days would keep reporting
+its creation moment.
 
 ```jsonc
 // $DSH_HOME/collab-routing.json
@@ -89,6 +114,22 @@ A session id is a per-machine fact. Never copy one between machines.
   }
 }
 ```
+
+A session id is a per-machine fact. Never copy one between machines. A **label**, on the other hand, is
+a name a person chose, so it is worth agreeing on across machines even though the ids behind it differ.
+
+### Naming a conversation from inside it
+
+`$DSH_SESSION_ID` is exported into every process a conversation starts, so a conversation can register
+its own label without anybody looking an id up:
+
+```
+collab-cli label --as perf        # run inside the conversation; uses its own session id and cwd
+```
+
+That registers `perf` for this workspace without changing the project's current node. Add `--current`
+to move the project onto it as well. Afterwards the conversation can be addressed with
+`ask_dsh(project, node: "perf")` from anywhere.
 
 Two state files keep names that predate the rename: the discovery file
 (`$DSH_HOME/collab-bridge.json`, holding host/port/token/pid) and the audit log

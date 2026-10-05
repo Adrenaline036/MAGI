@@ -7,11 +7,20 @@
 // proves the plugin's logic without loading it into a profile.
 
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { zstdCompressSync } from 'node:zlib'
-import { readSessionEvents, sessionLogFile, sessionsRoot, usageFromEvents, toolResultContent, toolCallsFromEvents } from '../lib/session-log.mjs'
+import {
+  readSessionEvents,
+  sessionActivityMs,
+  sessionLogFile,
+  sessionSummary,
+  sessionsRoot,
+  usageFromEvents,
+  toolResultContent,
+  toolCallsFromEvents,
+} from '../lib/session-log.mjs'
 import { markAnswer } from '../tools/transport/push-to-codex.mjs'
 import {
   REVIEW_TIMEOUT_DEFAULT_MS,
@@ -270,6 +279,155 @@ routing.setRoute({ project: PROJECT, node: 'bridge-design', sessionId: 'session-
 const routed = routing.resolveCollabSession({ project: PROJECT })
 check('routing: an explicit node route wins over inference', routed.session_id === 'session-live-0001' && routed.resolved_by === 'routes[bridge-design]')
 
+// --- naming a conversation instead of a route --------------------------------
+// The app writes a conversation's title as a durable `session/title` event, first from the opening
+// prompt and refined afterwards, so the last one is what the window shows. Reading it lets a caller
+// address a conversation by the name the user knows. What must hold:
+//   * the LAST title wins, not the first
+//   * the identifying line is something the user actually typed: not a harness wrapper, not a
+//     bridge injection
+//   * a stale, cached title is never served after the log changes
+//   * naming something that matches nothing, or more than one conversation, is refused with the
+//     choices rather than guessed at
+
+function writeSessionLog(sessionDir, frames) {
+  mkdirSync(sessionDir, { recursive: true })
+  const parts = frames.map((events) => zstdCompressSync(Buffer.from(`${events.map((e) => JSON.stringify(e)).join('\n')}\n`, 'utf8')))
+  writeFileSync(join(sessionDir, 'session.v4.jsonl.zstd'), Buffer.concat(parts))
+}
+
+const NAMED_PROJECT = 'D:\\Examples\\Named'
+const namedRoot = join(home, 'sessions', slug(NAMED_PROJECT))
+const alpha = join(namedRoot, 'session-alpha-0001')
+const beta = join(namedRoot, 'session-beta-0002')
+const gamma = join(namedRoot, 'session-gamma-0003')
+
+writeSessionLog(alpha, [
+  [
+    { type: 'session', data: { id: 'session-alpha-0001' } },
+    { type: 'session/title', data: { title: '第一个标题', titleProvider: 'session-title-first-prompt-llm' } },
+    { type: 'user/message', data: { content: [{ type: 'text', text: '<system-reminder> a harness wrapper, not the user' }] } },
+  ],
+  [
+    { type: 'session/title', data: { title: '示例项目维护' } },
+    { type: 'user/message', data: { content: [{ type: 'text', text: '这句是用户说的' }] } },
+  ],
+  [
+    { type: 'user/message', data: { source: { kind: 'plugin:collabridge' }, content: [{ type: 'text', text: 'a relayed question, not the user' }] } },
+    { type: 'user/message', data: { content: [{ type: 'text', text: '开工吧' }] } },
+  ],
+])
+writeSessionLog(beta, [
+  [
+    { type: 'session/title', data: { title: '恢复 Ctrl+Enter 示例功能' } },
+    { type: 'user/message', data: { content: [{ type: 'text', text: '该清的都可以清掉了' }] } },
+  ],
+])
+// Two conversations whose titles share a phrase, plus one that repeats another title exactly: both
+// are what "the user named something ambiguous" looks like in practice.
+writeSessionLog(gamma, [
+  [
+    { type: 'session/title', data: { title: '示例功能的另一件事' } },
+    { type: 'user/message', data: { content: [{ type: 'text', text: '这条也提到示例功能' }] } },
+  ],
+])
+const epsilon = join(namedRoot, 'session-epsilon-0006')
+writeSessionLog(epsilon, [
+  [
+    { type: 'session/title', data: { title: '示例功能的另一件事' } },
+    { type: 'user/message', data: { content: [{ type: 'text', text: '和上一条同名' }] } },
+  ],
+])
+
+const alphaSummary = sessionSummary(alpha)
+check('summary: the LAST title wins', alphaSummary.title === '示例项目维护', JSON.stringify(alphaSummary.title))
+check('summary: the identifying line is the user\'s, not a wrapper', alphaSummary.lastUserLine === '开工吧', JSON.stringify(alphaSummary.lastUserLine))
+check('summary: a bridge-injected message is not the user\'s line', alphaSummary.lastUserLine !== 'a relayed question, not the user')
+const betaSummary = sessionSummary(beta)
+check('summary: a conversation with one title reports it', betaSummary.title === '恢复 Ctrl+Enter 示例功能')
+
+// A stale title must not survive the log it came from. This session exists only for that check, so
+// rewriting it cannot disturb the titles the selection checks depend on.
+const delta = join(namedRoot, 'session-delta-0007')
+writeSessionLog(delta, [
+  [
+    { type: 'session/title', data: { title: '缓存之前的标题' } },
+    { type: 'user/message', data: { content: [{ type: 'text', text: '第一句' }] } },
+  ],
+])
+const cachedFirst = sessionSummary(delta).title
+writeSessionLog(delta, [
+  [
+    { type: 'session/title', data: { title: '缓存之前的标题' } },
+    { type: 'user/message', data: { content: [{ type: 'text', text: '第一句' }] } },
+  ],
+  [{ type: 'session/title', data: { title: '改过的标题' } }],
+])
+const afterChange = sessionSummary(delta).title
+check('summary: a changed log is not served from cache', cachedFirst === '缓存之前的标题' && afterChange === '改过的标题', `${cachedFirst} -> ${afterChange}`)
+
+// Recency is the newest entry inside the session directory: the directory's own mtime only moves when
+// entries are added or removed, so it reports the moment a conversation was created.
+const staleDir = join(namedRoot, 'session-stale-0004')
+const freshDir = join(namedRoot, 'session-fresh-0005')
+writeSessionLog(staleDir, [[{ type: 'session/title', data: { title: '旧会话' } }]])
+writeSessionLog(freshDir, [[{ type: 'session/title', data: { title: '新会话' } }]])
+const old = new Date(Date.now() - 6 * 60 * 60 * 1000)
+utimesSync(join(freshDir, 'session.v4.jsonl.zstd'), old, old)   // its DIR mtime stays recent
+utimesSync(freshDir, new Date(), new Date())
+utimesSync(join(staleDir, 'session.v4.jsonl.zstd'), new Date(), new Date())  // its FILE is recent
+utimesSync(staleDir, old, old)                                   // while its DIR mtime is old
+check(
+  'recency: the newest entry decides, not the directory mtime',
+  sessionActivityMs(staleDir) > sessionActivityMs(freshDir),
+  `${sessionActivityMs(staleDir)} vs ${sessionActivityMs(freshDir)}`,
+)
+const ordered = routing.sessionsForProject(NAMED_PROJECT)
+check('recency: ordering follows the newest entry', ordered[0]?.id === 'session-stale-0004', JSON.stringify(ordered.map((s) => s.id)))
+
+// --- choosing a conversation -------------------------------------------------
+const byExact = routing.resolveCollabSession({ project: NAMED_PROJECT, title: '示例项目维护' })
+check('select: an exact title resolves', byExact.session_id === 'session-alpha-0001' && byExact.resolved_by === 'title', JSON.stringify(byExact))
+check('select: an exact title is reported as exact', byExact.matched_exactly === true && byExact.matched_title === '示例项目维护')
+
+const byFragment = routing.resolveCollabSession({ project: NAMED_PROJECT, title: 'Ctrl+Enter' })
+check('select: a unique fragment resolves and is marked inexact', byFragment.session_id === 'session-beta-0002' && byFragment.matched_exactly === false, JSON.stringify(byFragment))
+
+const byAmbiguous = routing.resolveCollabSession({ project: NAMED_PROJECT, title: '示例功能' })
+check('select: a fragment matching several conversations is refused', byAmbiguous.session_id === null && byAmbiguous.resolved_by === 'title-ambiguous', JSON.stringify(byAmbiguous))
+check('select: the refusal lists every match', (byAmbiguous.matches ?? []).length === 3, JSON.stringify(byAmbiguous.matches))
+check('select: every listed match carries a title', (byAmbiguous.matches ?? []).every((m) => typeof m.title === 'string' && m.title.length > 0))
+
+const byDuplicate = routing.resolveCollabSession({ project: NAMED_PROJECT, title: '示例功能的另一件事' })
+check('select: two conversations sharing a full title are refused', byDuplicate.session_id === null && byDuplicate.resolved_by === 'title-ambiguous', JSON.stringify(byDuplicate))
+
+const byNothing = routing.resolveCollabSession({ project: NAMED_PROJECT, title: '没有任何会话叫这个' })
+check('select: an unmatched title is refused as unmatched', byNothing.session_id === null && byNothing.reason === 'title_not_found')
+check('select: the refusal lists every conversation with its title', (byNothing.sessions ?? []).some((s) => s.title === '示例项目维护'))
+check('select: the listed conversations carry the user\'s own line', (byNothing.sessions ?? []).some((s) => s.last_user_line === '开工吧'))
+
+const byId = routing.resolveCollabSession({ project: NAMED_PROJECT, session: 'session-gamma-0003' })
+check('select: a full session id resolves', byId.session_id === 'session-gamma-0003' && byId.resolved_by === 'session')
+const byPrefix = routing.resolveCollabSession({ project: NAMED_PROJECT, session: 'session-gamma' })
+check('select: a unique session id prefix resolves', byPrefix.session_id === 'session-gamma-0003')
+const byNoId = routing.resolveCollabSession({ project: NAMED_PROJECT, session: 'session-absent-9999' })
+check('select: an unknown session id is refused', byNoId.session_id === null && byNoId.reason === 'session_not_in_workspace')
+const byBadPrefix = routing.resolveCollabSession({ project: NAMED_PROJECT, session: 'session-' })
+check('select: an ambiguous session id prefix is refused', byBadPrefix.session_id === null && byBadPrefix.reason === 'session_prefix_ambiguous')
+
+routing.setRoute({ project: NAMED_PROJECT, node: 'parallel-a', sessionId: 'session-alpha-0001', current: false })
+const byLabel = routing.resolveCollabSession({ project: NAMED_PROJECT, node: 'parallel-a' })
+check('select: a registered label resolves', byLabel.session_id === 'session-alpha-0001' && byLabel.resolved_by === 'routes[parallel-a]')
+const notCurrent = routing.loadRegistry().projects[routing.normaliseProject(NAMED_PROJECT)]
+check('select: labelling without --current leaves the project node alone', notCurrent.node === null, JSON.stringify(notCurrent.node))
+const byBadLabel = routing.resolveCollabSession({ project: NAMED_PROJECT, node: 'no-such-label' })
+check('select: an unregistered label is refused', byBadLabel.session_id === null && byBadLabel.reason === 'node_not_routed')
+check('select: the refusal lists the registered labels', (byBadLabel.labels ?? []).includes('parallel-a'))
+
+const inferredStill = routing.resolveCollabSession({ project: NAMED_PROJECT })
+check('select: no selector keeps the previous behaviour', inferredStill.resolved_by === 'newest-session-for-workspace', JSON.stringify(inferredStill))
+
+
 // --- HTTP surface ------------------------------------------------------------
 check('http: /health answers without a token', (await call('/health')).status === 200)
 
@@ -406,6 +564,58 @@ check('ask: follows a node switch', afterSwitch.status === 202 && afterSwitch.bo
 const otherResult = await call('/ask', { method: 'POST', body: { project: OTHER_PROJECT, question: 'x' } })
 check('ask: an unconfigured project with no sessions is refused', otherResult.status === 409 && otherResult.body.code === 'no_session_routed')
 
+// --- the same selection, through the real HTTP surface ------------------------
+// The live agent used by this suite has cwd PROJECT, so it is the one a title resolves to.
+const liveSummary = join(home, 'sessions', slug(PROJECT), 'session-live-0001')
+writeSessionLog(liveSummary, [
+  [
+    { type: 'session/title', data: { title: '示例项目维护' } },
+    { type: 'user/message', data: { content: [{ type: 'text', text: '开工吧' }] } },
+  ],
+])
+
+const byTitle = await call('/ask', { method: 'POST', body: { project: PROJECT, title: '示例项目维护', question: 'by title' } })
+check('http: /ask delivers by title', byTitle.status === 202 && byTitle.body.session_id === 'session-live-0001', JSON.stringify(byTitle.body))
+check('http: the acceptance names the matched title', byTitle.body.matched_title === '示例项目维护', JSON.stringify(byTitle.body))
+const deliveredByTitle = liveAgent.received.at(-1)?.message?.content?.[0]?.text ?? ''
+check('http: the delivered framing says how it was addressed', deliveredByTitle.includes('标题《示例项目维护》'), deliveredByTitle.slice(0, 200))
+
+const byFragmentHttp = await call('/ask', { method: 'POST', body: { project: PROJECT, title: '项目维护', question: 'by fragment' } })
+check('http: /ask delivers by a unique title fragment', byFragmentHttp.status === 202 && byFragmentHttp.body.session_id === 'session-live-0001')
+
+const unknownTitle = await call('/ask', { method: 'POST', body: { project: PROJECT, title: '根本没有这个标题', question: 'x' } })
+check('http: an unknown title is refused', unknownTitle.status === 409 && unknownTitle.body.code === 'title_not_found', JSON.stringify(unknownTitle.body))
+check('http: the refusal offers the conversations', (unknownTitle.body.sessions ?? []).some((s) => s.title === '示例项目维护'))
+check('http: the refusal offers the last thing the user said', (unknownTitle.body.sessions ?? []).some((s) => s.last_user_line === '开工吧'))
+
+const unknownLabel = await call('/ask', { method: 'POST', body: { project: PROJECT, node: 'not-a-label', question: 'x' } })
+check('http: an unregistered label is refused', unknownLabel.status === 409 && unknownLabel.body.code === 'node_not_routed', JSON.stringify(unknownLabel.body))
+check('http: the refusal offers the registered labels', (unknownLabel.body.labels ?? []).includes('live-node'))
+
+const unknownSession = await call('/ask', { method: 'POST', body: { project: PROJECT, session: 'session-nowhere-1234', question: 'x' } })
+check('http: an unknown session id is refused', unknownSession.status === 409 && unknownSession.body.code === 'session_not_found', JSON.stringify(unknownSession.body))
+
+const sessionsForProjectResult = await call(`/sessions?project=${encodeURIComponent(PROJECT)}`)
+check('http: /sessions can list one project', sessionsForProjectResult.status === 200 && Array.isArray(sessionsForProjectResult.body.sessions))
+check(
+  'http: a project listing carries titles and liveness',
+  (sessionsForProjectResult.body.sessions ?? []).some((s) => s.title === '示例项目维护' && s.live === true),
+  JSON.stringify(sessionsForProjectResult.body.sessions),
+)
+check(
+  'http: a live session is described by its title',
+  (sessionsForProjectResult.body.live_sessions ?? []).some((s) => s.id === 'session-live-0001' && s.title === '示例项目维护'),
+  JSON.stringify(sessionsForProjectResult.body.live_sessions),
+)
+
+// A title that names a conversation which is not live must say so, not fall back to another one.
+writeSessionLog(join(home, 'sessions', slug(PROJECT), 'session-closed-0002'), [
+  [{ type: 'session/title', data: { title: '已经关闭的会话' } }],
+])
+const closedTitle = await call('/ask', { method: 'POST', body: { project: PROJECT, title: '已经关闭的会话', question: 'x' } })
+check('http: a title naming a closed conversation is refused distinctly', closedTitle.status === 409 && closedTitle.body.code === 'title_matched_but_not_live', JSON.stringify(closedTitle.body))
+
+
 // Bad input
 check('ask: rejects a missing question', (await call('/ask', { method: 'POST', body: { project: PROJECT } })).status === 400)
 check('ask: rejects a missing project', (await call('/ask', { method: 'POST', body: { question: 'x' } })).status === 400)
@@ -426,8 +636,11 @@ check('http: /routes exposes the registry', (await call('/routes')).status === 2
 const auditLines = readFileSync(join(home, 'collab-bridge.log.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l))
 const admitted = auditLines.filter((l) => l.event === 'admitted')
 const refused = auditLines.filter((l) => l.event === 'refused')
-check('audit: every successful admission is recorded', admitted.length === 3, `admitted=${admitted.length}`)
+// Every delivery made above is recorded; the exact number follows the cases this suite runs, so the
+// assertion is about the deliveries it made rather than a fixed count.
+check('audit: every successful admission is recorded', admitted.length >= 3, `admitted=${admitted.length}`)
 check('audit: records the question id and session', admitted.some((l) => l.session_id === 'session-live-0001' && /^[0-9a-f-]{36}$/.test(l.question_id)))
+check('audit: records which selector chose the target', admitted.some((l) => l.selector === 'title' && l.matched_title === '示例项目维护'), JSON.stringify(admitted.map((l) => l.selector)))
 check('audit: records route mutations', auditLines.some((l) => l.event === 'route_set') && auditLines.some((l) => l.event === 'node_switched'))
 check('audit: never records the question body', !JSON.stringify(auditLines).includes('四阶段契约'))
 
@@ -468,12 +681,20 @@ const mcpResponses = await runMcp([
 check('mcp: initialize echoes the client protocol version', mcpResponses[0]?.result?.protocolVersion === '2025-06-18', JSON.stringify(mcpResponses[0]))
 check('mcp: initialize names the server', mcpResponses[0]?.result?.serverInfo?.name === 'dsh-collabridge')
 check('mcp: a notification draws no response', mcpResponses.length === 2, `responses=${mcpResponses.length}`)
-check('mcp: tools/list exposes both tools', mcpResponses[1]?.result?.tools?.length === 2, JSON.stringify(mcpResponses[1]?.result?.tools?.map((t) => t.name)))
+check('mcp: tools/list exposes every tool', mcpResponses[1]?.result?.tools?.length === 3, JSON.stringify(mcpResponses[1]?.result?.tools?.map((t) => t.name)))
 const tools = mcpResponses[1]?.result?.tools ?? []
 const tool = tools.find((t) => t.name === 'ask_dsh')
 const reviewTool = tools.find((t) => t.name === 'dsh_review')
+const sessionsTool = tools.find((t) => t.name === 'dsh_sessions')
 check('mcp: ask_dsh is exposed', Boolean(tool))
 check('mcp: dsh_review is exposed', Boolean(reviewTool))
+check('mcp: dsh_sessions is exposed', Boolean(sessionsTool))
+check(
+  'mcp: ask_dsh accepts the three selectors',
+  ['title', 'node', 'session'].every((key) => Boolean(tool?.inputSchema?.properties?.[key])),
+  JSON.stringify(Object.keys(tool?.inputSchema?.properties ?? {})),
+)
+check('mcp: dsh_sessions only needs a project', JSON.stringify(Object.keys(sessionsTool?.inputSchema?.properties ?? {})) === '["project"]')
 check('mcp: ask_dsh requires project and question', tool?.inputSchema?.required?.join(',') === 'project,question')
 check('mcp: ask_dsh rejects extra fields at the schema level', tool?.inputSchema?.additionalProperties === false)
 check('mcp: the ask_dsh description warns against rewording', /verbatim|unchanged/i.test(tool?.description ?? ''))

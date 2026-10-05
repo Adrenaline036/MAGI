@@ -1,6 +1,6 @@
 {
   "name": "dsh-collabridge",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "description": "Deliver an external question (from Codex) into a live DeepSeek Harness collaboration session, routed by project and development node",
   "keywords": [
