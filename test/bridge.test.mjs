@@ -517,6 +517,43 @@ check('select: no selector keeps the previous behaviour', inferredStill.resolved
   check('outbound: candidates carry the thread id, title and activity', (nothing.candidates ?? []).every((c) => typeof c.thread_id === 'string' && typeof c.last_activity === 'string'))
   check('outbound: an empty title is refused before searching', push.resolveCodexThreadByTitle({ title: '   ', codexHome }).reason === 'title_required')
 
+  // The flag layer decides whether a named title reaches the resolver at all. A flag with no value, or
+  // one whose value is the next flag, must NOT resolve as "no title was named": that would fall back to
+  // the project's newest thread and deliver DSH's words to a thread the caller never named.
+  const parsedBare = push.parseFlags(['--project', 'P', '--message', 'hi', '--title'])
+  check('outbound: a valueless flag is recorded as present, not as a value', parsedBare.title === true, JSON.stringify(parsedBare))
+  const parsedSwallow = push.parseFlags(['--title', '--dry-run', '--message', 'hi'])
+  check('outbound: a flag does not swallow the next flag as its value', parsedSwallow.title === true && parsedSwallow['dry-run'] === true, JSON.stringify(parsedSwallow))
+  const parsedValue = push.parseFlags(['--title', '某个标题', '--dry-run'])
+  check('outbound: a real value is still taken', parsedValue.title === '某个标题' && parsedValue['dry-run'] === true, JSON.stringify(parsedValue))
+
+  // `--name=value` is what a shell writes for `--name="$VAR"`, and an unset variable makes it
+  // `--name=`. Keeping the `=` inside the key recorded `{"title=": true}`, so the named title never
+  // reached the resolver and the call fell through to project targeting.
+  const equalsEmpty = push.parseFlags(['--project', 'P', '--title='])
+  check('outbound: --title= records an empty title, not a new key', equalsEmpty.title === '' && !('title=' in equalsEmpty), JSON.stringify(equalsEmpty))
+  const equalsValue = push.parseFlags(['--title=某个标题', '--dry-run'])
+  check('outbound: --title=value records the value', equalsValue.title === '某个标题' && equalsValue['dry-run'] === true, JSON.stringify(equalsValue))
+  const equalsRefused = push.resolveTarget({ flags: push.parseFlags(['--title=', '--project', 'D:\\Examples\\Workspace']), codexHome })
+  check('outbound: --title= is refused rather than resolved by project', equalsRefused.ok === false && equalsRefused.reason === 'title_required', JSON.stringify(equalsRefused))
+  const equalsResolved = push.resolveTarget({ flags: push.parseFlags(['--title=闲聊']), codexHome })
+  check('outbound: --title=value resolves by title', equalsResolved.ok === true && equalsResolved.resolvedBy === 'title' && equalsResolved.thread.id === threads[1].id, JSON.stringify(equalsResolved))
+  const equalsWithThread = push.resolveTarget({ flags: push.parseFlags(['--thread=' + threads[1].id, '--title=']), codexHome })
+  check('outbound: an empty --title is refused even next to an explicit thread', equalsWithThread.ok === false && equalsWithThread.reason === 'title_required', JSON.stringify(equalsWithThread))
+  const threadEquals = push.resolveTarget({ flags: push.parseFlags(['--thread=' + threads[1].id]), codexHome })
+  check('outbound: an explicit thread still works in the equals form', threadEquals.ok === true && threadEquals.thread.id === threads[1].id, JSON.stringify(threadEquals))
+
+  const bareTitle = push.resolveTarget({ flags: { title: true, project: 'D:\\Examples\\Workspace' }, codexHome })
+  check('outbound: a valueless --title is refused, not resolved by project', bareTitle.ok === false && bareTitle.reason === 'title_required', JSON.stringify(bareTitle))
+  const blankTitle = push.resolveTarget({ flags: { title: '   ', project: 'D:\\Examples\\Workspace' }, codexHome })
+  check('outbound: a blank --title is refused too', blankTitle.ok === false && blankTitle.reason === 'title_required')
+  const explicitWins = push.resolveTarget({ flags: { thread: threads[1].id, title: '示例项目维护' }, codexHome })
+  check('outbound: an explicit thread id wins over a title', explicitWins.ok === true && explicitWins.thread.id === threads[1].id && explicitWins.resolvedBy === 'explicit', JSON.stringify(explicitWins))
+  const titledTarget = push.resolveTarget({ flags: { title: '示例项目维护' }, codexHome })
+  check('outbound: a title resolves through the policy', titledTarget.ok === true && titledTarget.resolvedBy === 'title' && titledTarget.thread.id === threads[0].id, JSON.stringify(titledTarget))
+  const noTarget = push.resolveTarget({ flags: { project: 'D:\\Examples\\Nobody' }, codexHome })
+  check('outbound: an unmatched project is refused', noTarget.ok === false && noTarget.reason === 'no_codex_thread_for_project', JSON.stringify(noTarget))
+
   rmSync(codexHome, { recursive: true, force: true })
 }
 

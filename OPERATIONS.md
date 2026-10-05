@@ -234,7 +234,7 @@ and `thread_title`, so a rename is visible in the result.
 
 ## Verification
 
-`node --test test/bridge.test.mjs` — 218 checks, no DSH process and no cost. It drives the real
+`node --test test/bridge.test.mjs` — 232 checks, no DSH process and no cost. It drives the real
 `apply()` through a fake cordis context, so the real HTTP surface, routing, admission
 decision, refusal auditing and audit log all run; it also pins the message order of both relay
 directions (relayed text first, provenance block last) against `markAnswer()`. `node --test

@@ -270,20 +270,65 @@ export function markAnswer({ answer, questionId, basis }) {
   return `${answer}\n\n${footer}`
 }
 
-function parseFlags(argv) {
+export function parseFlags(argv) {
   const flags = {}
   for (let i = 0; i < argv.length; i += 1) {
     if (!argv[i].startsWith('--')) continue
-    flags[argv[i].slice(2)] = argv[i + 1] ?? true
+    const token = argv[i].slice(2)
+    // `--name=value` is the spelling a shell produces for `--name="$VAR"`, and an unset variable makes
+    // it `--name=`. Treating the whole token as a key recorded `{"name=": true}`, so a named title never
+    // reached the resolver and the call fell through to project targeting: the answer was delivered to
+    // a thread the caller never named. Split at the first `=`, and keep an empty value as an empty
+    // string so the empty-title rule sees it.
+    const equals = token.indexOf('=')
+    if (equals !== -1) {
+      flags[token.slice(0, equals)] = token.slice(equals + 1)
+      continue
+    }
+    const next = argv[i + 1]
+    // A following flag is not this flag's value: `--title --dry-run` used to set the title to the
+    // literal "--dry-run" and silently consume the dry run.
+    if (next === undefined || next.startsWith('--')) {
+      flags[token] = true
+      continue
+    }
+    flags[token] = next
     i += 1
   }
   return flags
 }
 
+/**
+ * Which Codex thread a push is addressed to.
+ *
+ * Kept separate from main() so the policy — including what must be REFUSED — is testable without
+ * spawning a process. Naming something and having it silently resolve to something else is the one
+ * outcome this must never produce: a caller whose `--title "$TITLE"` expanded to nothing would
+ * otherwise get the project's newest thread and never learn that its name was ignored.
+ */
+export function resolveTarget({ flags, codexHome, sessionsDir } = {}) {
+  if ('title' in flags && (typeof flags.title !== 'string' || flags.title.trim() === '')) {
+    return {
+      ok: false,
+      reason: 'title_required',
+      hint: '--title was given without a non-empty value; it is refused rather than falling back to --project.',
+    }
+  }
+  if (flags.thread) return { ok: true, thread: { id: flags.thread, title: null, cwd: null, ageMinutes: null, fresh: true }, resolvedBy: 'explicit' }
+  if (typeof flags.title === 'string') {
+    const titled = resolveCodexThreadByTitle({ title: flags.title, codexHome, sessionsDir })
+    if (!titled.ok) return { ok: false, reason: titled.reason, requested: titled.requested, matches: titled.matches, candidates: titled.candidates }
+    return { ok: true, thread: titled.thread, resolvedBy: titled.thread.titleMatchedExactly ? 'title' : 'title-fragment' }
+  }
+  const byProject = resolveCodexThread({ project: flags.project })
+  if (!byProject) return { ok: false, reason: 'no_codex_thread_for_project', project: flags.project }
+  return { ok: true, thread: byProject, resolvedBy: 'project' }
+}
+
 async function main() {
   const flags = parseFlags(process.argv.slice(2))
   if (!flags.project && !flags.title && !flags.thread) {
-    throw new Error('usage: push-to-codex.mjs [--project <path> | --title <thread title> | --thread <id>] --message-file <f> [--question-id <id>] [--basis <text>] [--dry-run]')
+    throw new Error('usage: push-to-codex.mjs [--project <path> | --title <thread title> | --thread <id>] --message-file <f> [--question-id <id>] [--basis <text>] [--dry-run]\n(a flag\'s value must not itself begin with --, so pass such text through --message-file)')
   }
 
   const { readFileSync } = await import('node:fs')
@@ -291,29 +336,14 @@ async function main() {
   if (typeof raw !== 'string' || raw.trim().length === 0) throw new Error('a non-empty --message-file or --message is required')
 
   // Most explicit wins: an id, then a named title, then the project's most recent thread.
-  let thread = null
-  let resolvedBy = null
-  if (flags.thread) {
-    thread = { id: flags.thread, cwd: null, ageMinutes: null, fresh: true }
-    resolvedBy = 'explicit'
-  } else if (typeof flags.title === 'string') {
-    const titled = resolveCodexThreadByTitle({ title: flags.title })
-    if (!titled.ok) {
-      process.stdout.write(`${JSON.stringify({ ok: false, code: titled.reason, requested: titled.requested, matches: titled.matches, candidates: titled.candidates }, null, 2)}\n`)
-      process.exitCode = 3
-      return
-    }
-    thread = titled.thread
-    resolvedBy = titled.thread.titleMatchedExactly ? 'title' : 'title-fragment'
-  } else {
-    thread = resolveCodexThread({ project: flags.project })
-    resolvedBy = 'project'
-  }
-  if (!thread) {
-    process.stdout.write(`${JSON.stringify({ ok: false, code: 'no_codex_thread_for_project', project: flags.project }, null, 2)}\n`)
+  const target = resolveTarget({ flags })
+  if (!target.ok) {
+    process.stdout.write(`${JSON.stringify({ ok: false, code: target.reason, requested: target.requested, hint: target.hint, matches: target.matches, candidates: target.candidates, project: target.project }, null, 2)}\n`)
     process.exitCode = 3
     return
   }
+  const thread = target.thread
+  const resolvedBy = target.resolvedBy
 
   const message = markAnswer({ answer: raw, questionId: flags['question-id'], basis: flags.basis })
   const record = {
