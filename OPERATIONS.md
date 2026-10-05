@@ -212,9 +212,29 @@ node lib/cli.mjs ask   --project <path> --question-file <path> [--mode followup|
 into every process a conversation starts, so the command registers that session under the given name in
 its own working directory. Without `--current` the project's current node is left alone.
 
+### Pushing an answer back into a Codex thread
+
+`tools/transport/push-to-codex.mjs` puts DSH's own words into a Codex thread. The thread can be named
+three ways, most explicit first:
+
+```
+node tools/transport/push-to-codex.mjs --thread <thread id>       --message-file <f>
+node tools/transport/push-to-codex.mjs --title  "<thread title>"  --message-file <f>
+node tools/transport/push-to-codex.mjs --project <path>           --message-file <f>
+```
+
+`--title` follows the same rules as the inbound selectors: an exact title wins, otherwise a title
+containing the text wins if it is the only one, and several matches or none return the candidates
+(thread id, current title, last activity) instead of a guess. Titles are read as they currently stand:
+`session_index.jsonl` holds one line per write, so a renamed thread has several and only the newest
+`updated_at` counts, while a rename that lands with an empty name falls back to the newest real one. A
+thread owning several rollout files (a resumed or forked conversation) appears once, as its newest
+rollout. The record printed carries `resolved_by` (`title`, `title-fragment`, `explicit` or `project`)
+and `thread_title`, so a rename is visible in the result.
+
 ## Verification
 
-`node --test test/bridge.test.mjs` — 202 checks, no DSH process and no cost. It drives the real
+`node --test test/bridge.test.mjs` — 215 checks, no DSH process and no cost. It drives the real
 `apply()` through a fake cordis context, so the real HTTP surface, routing, admission
 decision, refusal auditing and audit log all run; it also pins the message order of both relay
 directions (relayed text first, provenance block last) against `markAnswer()`. `node --test
@@ -251,8 +271,10 @@ back with `codex queue` and consumed automatically.
 
 - **Live targets only.** `agents.resume` exists and would allow delivering to a cold session,
   but its option shape is untested here, so a cold target is reported rather than started.
-- **No push-back.** The plugin is inbound only. Getting the answer back into Codex needs
-  `codex queue --thread <id>` on the coordinator's side; routing that reply needs the Codex
-  thread id, which is not passed automatically.
+- **The push back is a separate tool, not part of the plugin.** The plugin is inbound only; the answer
+  returns through `tools/transport/push-to-codex.mjs`, which lives beside it (see Diagnostics). The
+  plugin cannot choose the reply's destination by itself: the inbound delivery carries no thread id
+  unless the caller supplies one, so whoever coordinates the exchange names the thread, by id or by
+  title.
 - **Nothing here bounds a conversation loop.** Two agents can keep answering each other; the plugin
   relays, it does not decide when to stop. Whoever drives the exchange decides that.

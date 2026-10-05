@@ -383,7 +383,13 @@ check(
   `${sessionActivityMs(staleDir)} vs ${sessionActivityMs(freshDir)}`,
 )
 const ordered = routing.sessionsForProject(NAMED_PROJECT)
-check('recency: ordering follows the newest entry', ordered[0]?.id === 'session-stale-0004', JSON.stringify(ordered.map((s) => s.id)))
+const staleAt = ordered.findIndex((s) => s.id === 'session-stale-0004')
+const freshAt = ordered.findIndex((s) => s.id === 'session-fresh-0005')
+check(
+  'recency: the session with a recent file outranks one whose directory looks recent',
+  staleAt >= 0 && freshAt >= 0 && staleAt < freshAt,
+  JSON.stringify(ordered.map((s) => s.id)),
+)
 
 // --- choosing a conversation -------------------------------------------------
 const byExact = routing.resolveCollabSession({ project: NAMED_PROJECT, title: '示例项目维护' })
@@ -426,6 +432,64 @@ check('select: the refusal lists the registered labels', (byBadLabel.labels ?? [
 
 const inferredStill = routing.resolveCollabSession({ project: NAMED_PROJECT })
 check('select: no selector keeps the previous behaviour', inferredStill.resolved_by === 'newest-session-for-workspace', JSON.stringify(inferredStill))
+
+// --- the outbound side: finding a Codex thread by its title -------------------
+// Same rules as the inbound side. Two facts about the source make it less trivial than a lookup: a
+// thread is RENAMED while in use and `session_index.jsonl` keeps one line per write, so the same id
+// appears with several names and only the newest `updated_at` is current; and a rename can land with
+// an empty name before the new one is written.
+{
+  const push = await import('../tools/transport/push-to-codex.mjs')
+  const codexHome = mkdtempSync(join(tmpdir(), 'collabridge-codex-'))
+  const codexSessions = join(codexHome, 'sessions', '2026', '10', '05')
+  mkdirSync(codexSessions, { recursive: true })
+
+  const threads = [
+    { id: '11111111-1111-4111-8111-111111111111', cwd: 'D:\\Examples\\Workspace', names: [['2026-10-05T20:00:00Z', '示例项目旧标题'], ['2026-10-05T21:35:00Z', '示例项目维护']] },
+    { id: '22222222-2222-4222-8222-222222222222', cwd: 'D:\\Examples\\Workspace', names: [['2026-10-05T20:59:00Z', '闲聊']] },
+    { id: '33333333-3333-4333-8333-333333333333', cwd: 'D:\\Examples\\Other', names: [['2026-10-05T19:00:00Z', '示例功能的另一件事']] },
+    { id: '44444444-4444-4444-8444-444444444444', cwd: 'D:\\Examples\\Other', names: [['2026-10-05T18:00:00Z', '示例功能收尾']] },
+    { id: '55555555-5555-4555-8555-555555555555', cwd: 'D:\\Examples\\Silent', names: [['2026-10-05T21:00:00Z', ''], ['2026-10-05T21:10:00Z', '无名线程的旧名字']] },
+  ]
+  const indexLines = []
+  for (const thread of threads) {
+    for (const [updatedAt, name] of thread.names) {
+      indexLines.push(JSON.stringify({ id: thread.id, thread_name: name, updated_at: updatedAt }))
+      // The rollout filename has to match the real convention: `rollout-<ISO without punctuation>-<uuid>`.
+      const stamp = updatedAt.replace(/[:.]/g, '-').replace(/Z$/, '')
+      const file = join(codexSessions, `rollout-${stamp}-${thread.id}.jsonl`)
+      writeFileSync(file, `${JSON.stringify({ type: 'session_meta', payload: { cwd: thread.cwd } })}\n{"type":"event_msg"}\n`)
+    }
+  }
+  writeFileSync(join(codexHome, 'session_index.jsonl'), `${indexLines.join('\n')}\n`)
+
+  const titles = push.readThreadTitles(codexHome)
+  check('outbound: a renamed thread keeps its newest title', titles.get(threads[0].id)?.title === '示例项目维护', JSON.stringify(titles.get(threads[0].id)))
+  check('outbound: an empty newest name falls back to the newest real name', titles.get(threads[4].id)?.title === '无名线程的旧名字', JSON.stringify(titles.get(threads[4].id)))
+
+  const exact = push.resolveCodexThreadByTitle({ title: '示例项目维护', codexHome })
+  check('outbound: an exact title resolves', exact.ok === true && exact.thread.id === threads[0].id, JSON.stringify(exact))
+  check('outbound: the resolution reports the title it matched', exact.thread?.title === '示例项目维护')
+  check('outbound: an exact title is marked exact', exact.thread?.titleMatchedExactly === true)
+
+  const fragment = push.resolveCodexThreadByTitle({ title: '闲聊', codexHome })
+  check('outbound: a unique fragment resolves', fragment.ok === true && fragment.thread.id === threads[1].id)
+
+  const renamed = push.resolveCodexThreadByTitle({ title: '示例项目旧标题', codexHome })
+  check('outbound: the name from before a rename no longer matches', renamed.ok === false && renamed.reason === 'title_not_found', JSON.stringify(renamed.reason))
+  check('outbound: the candidates show the current title instead', (renamed.candidates ?? []).some((c) => c.thread_id === threads[0].id && c.title === '示例项目维护'))
+
+  const ambiguous = push.resolveCodexThreadByTitle({ title: '示例功能', codexHome })
+  check('outbound: a fragment matching two threads is refused', ambiguous.ok === false && ambiguous.reason === 'title_ambiguous', JSON.stringify(ambiguous.reason))
+  check('outbound: the refusal lists both matches', (ambiguous.matches ?? []).length === 2, JSON.stringify(ambiguous.matches))
+
+  const nothing = push.resolveCodexThreadByTitle({ title: '没有任何线程叫这个', codexHome })
+  check('outbound: an unmatched title is refused with candidates', nothing.ok === false && nothing.reason === 'title_not_found' && (nothing.candidates ?? []).length >= 3)
+  check('outbound: candidates carry the thread id, title and activity', (nothing.candidates ?? []).every((c) => typeof c.thread_id === 'string' && typeof c.last_activity === 'string'))
+  check('outbound: an empty title is refused before searching', push.resolveCodexThreadByTitle({ title: '   ', codexHome }).reason === 'title_required')
+
+  rmSync(codexHome, { recursive: true, force: true })
+}
 
 
 // --- HTTP surface ------------------------------------------------------------
