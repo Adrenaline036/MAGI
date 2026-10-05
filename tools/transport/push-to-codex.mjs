@@ -102,6 +102,28 @@ export function resolveCodexThread({ project, maxAgeMinutes = 120, sessionsDir =
 }
 
 /**
+ * An ISO timestamp as a comparable key.
+ *
+ * The index's `updated_at` values are NOT all written at the same precision: the writer trims trailing
+ * zeros, so the same second can appear as `…T21:35:13.283917Z` and `…T21:35:13.2839177Z`. Compared as
+ * strings the first one wins, because `Z` sorts above `7`, and the LATER write is then taken for the
+ * older one. Measured on the real index: 95 lines carry seven fractional digits, seven carry six and
+ * one carries five, so the shape is real even though no two writes shared a second on the day this was
+ * found. Compare the second numerically and the fraction as a fixed-width digit string.
+ */
+function timeKey(value) {
+  const text = String(value ?? '')
+  const m = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?/.exec(text)
+  if (!m) return { seconds: 0, fraction: '' }
+  return { seconds: Date.parse(`${m[1]}Z`) || 0, fraction: (m[2] ?? '').padEnd(9, '0').slice(0, 9) }
+}
+
+function isLater(a, b) {
+  if (a.seconds !== b.seconds) return a.seconds > b.seconds
+  return a.fraction > b.fraction
+}
+
+/**
  * Thread titles, one per thread: the name the Codex window shows.
  *
  * Two facts make this less trivial than reading a map. A thread is renamed while it is in use, and
@@ -123,13 +145,13 @@ export function readThreadTitles(codexHome = join(process.env.USERPROFILE, '.cod
       continue
     }
     if (typeof entry.id !== 'string' || entry.id.length === 0) continue
-    const updatedAt = typeof entry.updated_at === 'string' ? entry.updated_at : ''
+    const at = timeKey(entry.updated_at)
     const name = typeof entry.thread_name === 'string' ? entry.thread_name.trim() : ''
-    const current = titles.get(entry.id) ?? { title: '', updatedAt: '', lastNamedAt: '' }
-    if (updatedAt >= current.updatedAt) current.updatedAt = updatedAt
-    if (name.length > 0 && updatedAt >= current.lastNamedAt) {
+    const current = titles.get(entry.id) ?? { title: '', updatedAt: { seconds: 0, fraction: '' }, lastNamedAt: { seconds: 0, fraction: '' } }
+    if (isLater(at, current.updatedAt)) current.updatedAt = at
+    if (name.length > 0 && isLater(at, current.lastNamedAt)) {
       current.title = name
-      current.lastNamedAt = updatedAt
+      current.lastNamedAt = at
     }
     titles.set(entry.id, current)
   }

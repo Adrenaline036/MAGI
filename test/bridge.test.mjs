@@ -467,6 +467,35 @@ check('select: no selector keeps the previous behaviour', inferredStill.resolved
   check('outbound: a renamed thread keeps its newest title', titles.get(threads[0].id)?.title === '示例项目维护', JSON.stringify(titles.get(threads[0].id)))
   check('outbound: an empty newest name falls back to the newest real name', titles.get(threads[4].id)?.title === '无名线程的旧名字', JSON.stringify(titles.get(threads[4].id)))
 
+  // The index's timestamps are not all written at the same precision (the writer trims trailing
+  // zeros), so the same second can appear as .283917 and .2839177. Compared as strings the first wins
+  // because 'Z' sorts above '7', which served the title from BEFORE the rename.
+  const mixedHome = mkdtempSync(join(tmpdir(), 'collabridge-codex-mixed-'))
+  const mixedId = '66666666-6666-4666-8666-666666666666'
+  mkdirSync(join(mixedHome, 'sessions', '2026', '10', '05'), { recursive: true })
+  writeFileSync(
+    join(mixedHome, 'session_index.jsonl'),
+    [
+      JSON.stringify({ id: mixedId, thread_name: '改名前的名字', updated_at: '2026-10-05T21:35:13.283917Z' }),
+      JSON.stringify({ id: mixedId, thread_name: '改名后的名字', updated_at: '2026-10-05T21:35:13.2839177Z' }),
+    ].join('\n') + '\n',
+  )
+  writeFileSync(join(mixedHome, 'sessions', '2026', '10', '05', `rollout-2026-10-05T21-35-13-${mixedId}.jsonl`), `${JSON.stringify({ type: 'session_meta', payload: { cwd: 'D:\\Examples\\Mixed' } })}\n`)
+  check(
+    'outbound: a later write with more fractional digits is the newer one',
+    push.readThreadTitles(mixedHome).get(mixedId)?.title === '改名后的名字',
+    JSON.stringify(push.readThreadTitles(mixedHome).get(mixedId)?.title),
+  )
+  check(
+    'outbound: the pre-rename name does not match even at mixed precision',
+    push.resolveCodexThreadByTitle({ title: '改名前的名字', codexHome: mixedHome }).ok === false,
+  )
+  check(
+    'outbound: the current name resolves at mixed precision',
+    push.resolveCodexThreadByTitle({ title: '改名后的名字', codexHome: mixedHome }).ok === true,
+  )
+  rmSync(mixedHome, { recursive: true, force: true })
+
   const exact = push.resolveCodexThreadByTitle({ title: '示例项目维护', codexHome })
   check('outbound: an exact title resolves', exact.ok === true && exact.thread.id === threads[0].id, JSON.stringify(exact))
   check('outbound: the resolution reports the title it matched', exact.thread?.title === '示例项目维护')
