@@ -161,10 +161,17 @@ check('prompt: covers structural_limits in the obligation_id rule', /every struc
 check('prompt: states over-length is a warning, not a rejection', /recorded as a warning, not rejected/.test(prompt))
 check('prompt: says a structural limit does not hold the gate', /does not hold the gate/.test(prompt))
 check('prompt: routes a genuinely outstanding verification to unknowns', /If you genuinely believe a verification is still outstanding/.test(prompt))
-// The reviewer can run pytest read-only; saying otherwise was a false structural limit that then
-// deadlocked a gate. The invocation and the narrow real limitation must both be stated.
+// The reviewer can run the declared command read-only; saying otherwise was a false structural
+// limit that then deadlocked a gate. The invocation and the narrow real limitation must both be
+// stated. Execution scope itself moved from promise to enforcement: a tool-dispatch guard admits
+// exactly one declared command, so the prompt states the enforced scope, names that single command,
+// and routes anything else to an unknown or a structural_limit. It no longer offers the reviewer a
+// pytest run of its own, which the guard would refuse.
 check('prompt: gives the working pytest invocation', /-q -s -p no:cacheprovider/.test(prompt))
-check('prompt: says the sandbox can still run pytest', /YOU CAN STILL RUN PYTEST/.test(prompt))
+check('prompt: states the enforced execution scope', /EXECUTION SCOPE IS ENFORCED/.test(prompt))
+check('prompt: names the one admitted shell command', /The ONLY shell command admitted/.test(prompt))
+check('prompt: sends extra execution to an unknown or a structural limit', /Additional verification must be requested as a precise unknown or structural_limit/.test(prompt))
+check('prompt: no longer promises the reviewer its own pytest run', !/YOU CAN STILL RUN PYTEST/.test(prompt))
 check('prompt: names the narrow real limitation', /tmp_path, tmpdir, tempfile\.TemporaryDirectory\(\)/.test(prompt))
 // A review disproved the earlier claim that capture was the ONLY blocker: projects that write at
 // import time (log handlers, lock files, mkdir) cannot be collected at all, and no flag fixes that.
