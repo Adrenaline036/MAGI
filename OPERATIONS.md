@@ -18,13 +18,27 @@ root session, and the whole point here is to reach an **existing** one.
 ## Delivery is not a new session
 
 ```
-agent.followup(message)   queued after any work in flight      (default)
-agent.steer(message)      injected at the next step boundary
-agent.inject(message)     placed into the current context
+agent.steer(message)      claimed at the next step boundary     (default)
+agent.followup(message)   queued as the turn after any work in flight
+agent.inject(message)     placed into the pending context without waking the driver
 ```
+
+The harness inbox has two lanes: `followup` writes `next-turn`, which the turn **already running**
+never reads, so a queued question can only be answered after that turn ends and then costs a turn of
+its own. `steer` writes `next-step`, which every step boundary claims, so the turn in flight picks
+the question up at its next step. Steer is safe on an idle session as well: a wake while idle always
+opens a turn boundary, and that turn's first step claims `next-step` together with one `next-turn`,
+so a steered question is never stranded. Callers who positively want the current work to finish first
+pass `mode: "followup"`.
 
 A cold or closed target is **refused**, never silently started: the response carries
 `target_not_live` plus the list of live sessions so the caller can re-route.
+
+This mode governs the **discussion channel** (`ask_dsh`) only. `dsh_review` never delivers into a live
+conversation: it stages the package under `$DSH_HOME/reviews/<package-id>` and spawns its own headless
+conductor plus reviewer (`review-bridge.mjs`, `--package … --cwd … --out …`). That path has no inbox, no
+delivery mode and no dependence on any conversation's state, so review traffic keeps its own flow
+regardless of this default.
 
 ## Routing: project, then one conversation inside it
 
@@ -205,7 +219,7 @@ node lib/cli.mjs routes
 node lib/cli.mjs route --project <path> --node <label> --session <id>
 node lib/cli.mjs node  --project <path> --node <label>
 node lib/cli.mjs label --as <name> [--current]    # run INSIDE a conversation: names it via DSH_SESSION_ID
-node lib/cli.mjs ask   --project <path> --question-file <path> [--mode followup|steer|inject] [--title <title>|--node <label>|--session <id>]
+node lib/cli.mjs ask   --project <path> --question-file <path> [--mode steer|followup|inject] [--title <title>|--node <label>|--session <id>]
 ```
 
 `label` is how a conversation gets a name without anybody reading an id: `$DSH_SESSION_ID` is exported

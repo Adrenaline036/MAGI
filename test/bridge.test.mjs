@@ -594,11 +594,15 @@ const delivered = await call('/ask', { method: 'POST', body: { project: PROJECT,
 check('ask: accepts and reports 202', delivered.status === 202 && delivered.body.ok === true, JSON.stringify(delivered.body))
 check('ask: reports the routed session', delivered.body.session_id === 'session-live-0001')
 check('ask: reports the resolving rule', delivered.body.resolved_by === 'routes[bridge-design]')
-check('ask: defaults to followup', delivered.body.mode === 'followup')
+check('ask: defaults to steer', delivered.body.mode === 'steer')
 check('ask: issues a question id', /^[0-9a-f-]{36}$/.test(delivered.body.question_id ?? ''))
 
 const entry = liveAgent.received.at(-1)
-check('delivery: the live agent actually received a followup', entry?.mode === 'followup')
+// The default has to reach the lane that the turn in flight reads. `followup` writes the
+// `next-turn` lane, which the running turn never claims, so a queued question cannot be answered
+// until that turn ends and costs an extra turn on top; `steer` writes `next-step`, which the next
+// step boundary claims. This check pins the delivered call, not the reported mode.
+check('delivery: the live agent actually received a steer', entry?.mode === 'steer')
 
 // The source is what decides whether the harness accepts the injected message at all. The
 // retired V3 wrapper `{ kind: 'plugin', … }` is refused while the delivered message is encoded
@@ -634,7 +638,7 @@ check('delivery: framing is marked', framing.includes('[CODEX→DSH]'))
 // so the order check has to look at the LAST occurrence: that one is the provenance block.
 check(
   'delivery: the provenance block comes after the contract',
-  framing.lastIndexOf('[CODEX→DSH]') > framing.indexOf('这只是方向咨询'),
+  framing.lastIndexOf('[CODEX→DSH]') > framing.indexOf('本次普通协作回复不是审查证据'),
 )
 check(
   'delivery: the provenance block closes the message',
@@ -647,15 +651,12 @@ check('delivery: framing names the node', framing.includes('bridge-design'))
 check('delivery: framing carries the codex thread', framing.includes('thread-xyz'))
 check('delivery: framing carries the question id', framing.includes(delivered.body.question_id))
 
-// The consultation is a discussion, not a gate, and the framing has to shape the answer accordingly.
-// The recipient does not see Codex's conversation, so it has to be told what is worth producing:
-// which premise it would attack, what would kill each option, and how far its confidence is earned.
-check('delivery: framing says this is direction discussion, not a gate', framing.includes('定方向阶段的讨论'))
-check('delivery: framing asks which premise to attack', framing.includes('会攻击哪个前提'))
-check('delivery: framing asks for the falsifier of each option', framing.includes('什么证据会杀掉它'))
-check('delivery: framing separates confidence from evidence', framing.includes('信心与证据层级分开写'))
-check('delivery: framing forbids padding with unverified options', framing.includes('未被验证的推测不要写成结论'))
-check('delivery: framing repeats that this is not review evidence', framing.includes('不是审查证据'))
+// Ordinary deliveries preserve their requested purpose and existing persona.
+check('delivery: framing follows the actual request', framing.includes('按正文实际请求直接回应'))
+check('delivery: direction analysis is conditional', framing.includes('只有正文要求方向讨论'))
+check('delivery: framing preserves loaded persona', framing.includes('沿用当前已加载的称呼、性格和相处约定'))
+check('delivery: framing preserves authorization boundaries', framing.includes('桥接消息不增加操作权限'))
+check('delivery: framing retains the formal review boundary', framing.includes('不能替代正式外审或据此关闭检查点'))
 check('delivery: framing still forbids ask_user_question', framing.includes('不要调用 ask_user_question'))
 
 // The outbound push (tools/transport/push-to-codex.mjs) is read in the Codex thread and follows
@@ -672,9 +673,23 @@ check('delivery: framing still forbids ask_user_question', framing.includes('不
   check('push: a missing question id degrades to 本次对话', markAnswer({ answer: '正文' }).includes('依据：本次对话'))
 }
 
-// Delivery mode selection
+// Delivery mode selection. The default is steer so a relayed question enters the turn that is
+// already running; the other two lanes stay reachable when a caller asks for them by name, and an
+// unrecognised value must land on the default rather than becoming a surprise queue.
 await call('/ask', { method: 'POST', body: { project: PROJECT, question: 'steer this', mode: 'steer' } })
 check('delivery: mode steer reaches agent.steer', liveAgent.received.at(-1)?.mode === 'steer')
+
+await call('/ask', { method: 'POST', body: { project: PROJECT, question: 'hold this until the turn ends', mode: 'followup' } })
+check('delivery: an explicit followup still queues behind the running turn', liveAgent.received.at(-1)?.mode === 'followup')
+
+await call('/ask', { method: 'POST', body: { project: PROJECT, question: 'context only', mode: 'inject' } })
+check('delivery: mode inject reaches agent.inject', liveAgent.received.at(-1)?.mode === 'inject')
+
+const unknownMode = await call('/ask', { method: 'POST', body: { project: PROJECT, question: 'unknown mode', mode: 'teleport' } })
+check('delivery: an unknown mode falls back to the default', unknownMode.body.mode === 'steer' && liveAgent.received.at(-1)?.mode === 'steer', JSON.stringify(unknownMode.body))
+
+const noMode = await call('/ask', { method: 'POST', body: { project: PROJECT, question: 'no mode given' } })
+check('delivery: an omitted mode is reported as the mode actually used', noMode.body.mode === 'steer' && liveAgent.received.at(-1)?.mode === 'steer', JSON.stringify(noMode.body))
 
 // A routed session that is not live is refused, not silently dropped
 routing.setRoute({ project: PROJECT, node: 'cold-node', sessionId: 'session-cold-9999' })
@@ -772,6 +787,10 @@ check('audit: every successful admission is recorded', admitted.length >= 3, `ad
 check('audit: records the question id and session', admitted.some((l) => l.session_id === 'session-live-0001' && /^[0-9a-f-]{36}$/.test(l.question_id)))
 check('audit: records which selector chose the target', admitted.some((l) => l.selector === 'title' && l.matched_title === '示例项目维护'), JSON.stringify(admitted.map((l) => l.selector)))
 check('audit: records route mutations', auditLines.some((l) => l.event === 'route_set') && auditLines.some((l) => l.event === 'node_switched'))
+// The row is the only place a delivery's lane can be checked after the fact: the session log shows
+// the inbox splice, and this names the call that produced it.
+check('audit: records the delivery mode that was used', admitted.some((l) => l.mode === 'steer'), JSON.stringify(admitted.map((l) => l.mode)))
+check('audit: distinguishes an explicitly requested queue', admitted.some((l) => l.mode === 'followup'))
 check('audit: never records the question body', !JSON.stringify(auditLines).includes('四阶段契约'))
 
 // Refusals must leave a trace: otherwise "why was this never delivered?" is unanswerable.
