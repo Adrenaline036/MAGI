@@ -14,7 +14,7 @@ Collabridge 包含 DSH 宿主插件、Codex MCP 服务和回复回推脚本。�
 
 讨论默认使用 `steer`：DSH 在当前回合的下一步边界接收消息，空闲时启动回合。只有明确希望排队时才使用 `followup`；`inject` 只补充上下文，不唤醒空闲会话。
 
-DSH 回推默认通过 Codex 桌面的 `send_message_to_thread` 入口发送。来源线程和桌面端点由 `ask_dsh` 自动登记；显式 `--mode followup` 才调用 `codex queue`。发送失败或结果不确定时会报错，不自动重试或退回排队。
+DSH 回推默认通过 Codex 桌面的 `send_message_to_thread` 入口发送。来源线程和桌面端点由 `ask_dsh` 自动登记；项目只提交正文和明确来源线程，不能指定发送模式。发送失败或结果不确定时会报错，不自动重试或退回排队。
 
 ## 安装与连接
 
@@ -61,10 +61,10 @@ DSH 回推默认通过 Codex 桌面的 `send_message_to_thread` 入口发送。�
 回复应使用提问框架中的来源线程：
 
 ```text
-node <插件目录>/tools/transport/push-to-codex.mjs --thread <来源线程 UUID> --message-file <正文文件>
+node <插件目录>/lib/reply.mjs --thread <来源线程 UUID> --message-file <正文文件>
 ```
 
-默认回推拒绝仅凭 `--project` 猜收件人。用户明确指定另一对话时可以使用 `--title`；需要排队时加 `--mode followup`。
+回推要求明确来源线程，不接受 `--project`、`--title` 或 `--mode`。项目不得另行调用 CLI 队列。
 
 ## 独立外审
 

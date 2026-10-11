@@ -1,27 +1,15 @@
 #!/usr/bin/env node
 // Push a DSH answer back into the Codex thread that asked.
 //
-// Discussion uses the desktop app's active-turn delivery. Explicit followup uses the CLI
-// queue. The original answer and provenance are passed without shell interpolation.
+// 兼容入口仅转交插件统一回复入口，不拥有投递策略。
 
-import { spawn } from 'node:child_process'
-import { appendFileSync, existsSync, openSync, readSync, closeSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, openSync, readSync, closeSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { deliveryMode, registerDesktopTarget, sendDesktopMessage } from '../../lib/codex-desktop-delivery.mjs'
+import { runReplyCli } from '../../lib/reply.mjs'
+export { markAnswer } from '../../lib/reply.mjs'
 
 const codexHome = join(process.env.USERPROFILE, '.codex')
 const sessionsRoot = join(codexHome, 'sessions')
-
-// Resolve the Codex CLI's JS entry instead of its .cmd shim: spawning a .cmd from Node
-// needs a shell, and a shell reintroduces the argument-quoting problem this avoids.
-function resolveCodexEntry() {
-  const candidates = [
-    join(process.env.APPDATA, 'npm', 'node_modules', '@openai', 'codex', 'bin', 'codex.js'),
-    join(process.env.USERPROFILE, 'AppData', 'Roaming', 'npm', 'node_modules', '@openai', 'codex', 'bin', 'codex.js'),
-  ]
-  for (const candidate of candidates) if (existsSync(candidate)) return candidate
-  throw new Error('could not locate the codex CLI entry; set CODEX_CLI_ENTRY')
-}
 
 // Read only the head of a rollout: session_meta sits at the top, and these files can reach
 // hundreds of megabytes.
@@ -225,47 +213,6 @@ export function resolveCodexThreadByTitle({ title, codexHome = join(process.env.
   }
 }
 
-function queueMessage({ thread, message }) {  const entry = resolveCodexEntry()
-  return new Promise((resolvePromise) => {
-    const child = spawn(process.execPath, [entry, 'queue', '--thread', thread, '--message', message], {
-      windowsHide: true,
-    })
-    let stdout = ''
-    let stderr = ''
-    child.stdout.on('data', (c) => {
-      stdout += c
-    })
-    child.stderr.on('data', (c) => {
-      stderr += c
-    })
-    child.on('error', (error) => resolvePromise({ code: null, stdout, stderr: String(error.message) }))
-    child.on('close', (code) => resolvePromise({ code, stdout, stderr }))
-  })
-}
-
-/**
- * Append the marker once, so a reader can always tell agent-authored turns from typed ones.
- *
- * The answer body stays FIRST and the marker block goes LAST. The push exists to put DSH's own
- * words into the thread, so a reader starting at the top must land on those words rather than on
- * a declaration about them; the provenance line is what a reader looks for afterwards, when
- * asking where the text came from. `---` separates the two, with a blank line in front of it so
- * Markdown does not read the last content line as a setext heading.
- */
-const ANSWER_MARK = '[DSH] 以上是 DSH 协作会话的回答原文，未经 Codex 改写。'
-
-export function markAnswer({ answer, questionId, basis }) {
-  // `startsWith` keeps the old prefix-format message from being marked twice; `includes` does the
-  // same for the footer format this now writes.
-  if (answer.startsWith('[DSH]') || answer.includes(ANSWER_MARK)) return answer
-  const footer = [
-    '---',
-    ANSWER_MARK,
-    `依据：${questionId ? `提问 ID ${questionId}` : '本次对话' }${basis ? `；${basis}` : ''}`,
-  ].join('\n')
-  return `${answer}\n\n${footer}`
-}
-
 export function parseFlags(argv) {
   const flags = {}
   for (let i = 0; i < argv.length; i += 1) {
@@ -331,80 +278,9 @@ export function resolveDeliveryTarget({ flags, mode = 'steer', ...options }) {
   return resolveTarget({ flags, ...options })
 }
 
-async function main() {
-  const flags = parseFlags(process.argv.slice(2))
-  if (flags['register-desktop']) {
-    const receipt = registerDesktopTarget({ thread: flags.thread })
-    if (!receipt) throw new Error('Run registration inside the target Codex chat; CODEX_APP_TOOLS_PIPE_PATH is missing')
-    process.stdout.write(`${JSON.stringify({ ok: true, registered: flags.thread, receipt })}\n`)
-    return
-  }
-  const mode = deliveryMode(flags.mode)
-  if (!flags.project && !flags.title && !flags.thread) {
-    throw new Error('usage: push-to-codex.mjs [--project <path> | --title <thread title> | --thread <id>] --message-file <f> [--mode steer|followup] [--question-id <id>] [--basis <text>] [--dry-run]\nRegister a desktop endpoint from Codex: --register-desktop --thread <id>\n(a flag\'s value must not itself begin with --, so pass such text through --message-file)')
-  }
-
-  const { readFileSync } = await import('node:fs')
-  const raw = flags['message-file'] ? readFileSync(flags['message-file'], 'utf8') : flags.message
-  if (typeof raw !== 'string' || raw.trim().length === 0) throw new Error('a non-empty --message-file or --message is required')
-
-  // Most explicit wins: an id, then a named title, then the project's most recent thread.
-  const target = resolveDeliveryTarget({ flags, mode })
-  if (!target.ok) {
-    process.stdout.write(`${JSON.stringify({ ok: false, code: target.reason, requested: target.requested, hint: target.hint, matches: target.matches, candidates: target.candidates, project: target.project }, null, 2)}\n`)
-    process.exitCode = 3
-    return
-  }
-  const thread = target.thread
-  const resolvedBy = target.resolvedBy
-
-  const message = markAnswer({ answer: raw, questionId: flags['question-id'], basis: flags.basis })
-  const record = {
-    ok: true,
-    thread_id: thread.id,
-    thread_title: thread.title ?? null,
-    resolved_by: resolvedBy,
-    thread_cwd: thread.cwd,
-    thread_age_minutes: thread.ageMinutes,
-    thread_fresh: thread.fresh,
-    message_length: message.length,
-    dry_run: Boolean(flags['dry-run']),
-    delivery_mode: mode,
-  }
-
-  if (flags['dry-run']) {
-    process.stdout.write(`${JSON.stringify(record, null, 2)}\n`)
-    return
-  }
-
-  const result = mode === 'followup'
-    ? await queueMessage({ thread: thread.id, message })
-    : await sendDesktopMessage({ thread: thread.id, message })
-  record.transport = result.transport ?? 'codex-queue'
-  record.delivery = result.delivery ?? (result.code === 0 ? 'queued' : 'failed')
-  record.transport_exit = result.code
-  record.transport_stdout = result.stdout.trim().slice(0, 300)
-  if (result.code !== 0) {
-    record.ok = false
-    record.transport_stderr = result.stderr.trim().slice(0, 300)
-    process.exitCode = 1
-  } else {
-    try {
-      appendFileSync(
-        join(import.meta.dirname, '..', 'push-audit.jsonl'),
-        `${JSON.stringify({ at: new Date().toISOString(), ...record })}\n`,
-        'utf8',
-      )
-    } catch {
-      // the push already happened; a failed audit append must not report failure
-    }
-  }
-  process.stdout.write(`${JSON.stringify(record, null, 2)}\n`)
-}
-
-if (process.argv[1] && import.meta.url === `file:///${process.argv[1].replace(/\\/g, '/')}`) {
-  main().catch((error) => {
-    process.stderr.write(`push-to-codex: ${error?.message ?? error}\n`)
+if (process.argv[1] && import.meta.url === new URL('file:///' + process.argv[1].replace(/\\/g, '/')).href) {
+  runReplyCli().then(result => process.stdout.write(JSON.stringify(result) + '\n')).catch(error => {
+    process.stderr.write(`collabridge reply: ${error.message}\n`)
     process.exitCode = 1
   })
 }

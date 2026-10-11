@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { PassThrough, Writable } from 'node:stream'
-import { callerThread, deliveryMode, sendDesktopMessage } from '../lib/codex-desktop-delivery.mjs'
+import { callerThread, sendDesktopMessage } from '../lib/codex-desktop-delivery.mjs'
 import { markAnswer, parseFlags, resolveDeliveryTarget } from '../tools/transport/push-to-codex.mjs'
 
 const thread = '00000000-0000-0000-0000-000000000024'
@@ -25,10 +25,10 @@ function harness(onRequest) {
   return { child, requests, calls, spawnImpl }
 }
 
-test('discussion defaults to steer; queueing requires explicit followup', () => {
-  assert.equal(deliveryMode(parseFlags([]).mode), 'steer')
-  assert.equal(deliveryMode(parseFlags(['--mode', 'followup']).mode), 'followup')
-  for (const mode of ['', true, 'inject', 'queue']) assert.throws(() => deliveryMode(mode))
+test('来源标记保留正文且只追加一次', () => {
+  const marked = markAnswer({ answer: '测试正文' })
+  assert.ok(marked.startsWith('测试正文'))
+  assert.equal(markAnswer({ answer: marked }), marked)
 })
 
 test('caller metadata takes priority over process thread and supports JSON text', () => {

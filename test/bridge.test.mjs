@@ -642,7 +642,7 @@ check(
 )
 check(
   'delivery: the provenance block closes the message',
-  framing.trimEnd().endsWith('回答通过回推脚本发送到来源 Codex 线程，并带 [DSH] 标记；默认使用桌面引导入口，只有明确要求排队时才使用 followup。'),
+  framing.includes('统一入口：node') && framing.includes('reply.mjs') && framing.includes('项目不得选择投递模式'),
   framing.slice(-120),
 )
 check('delivery: the question passes through verbatim', framing.includes('四阶段契约在方向讨论里还成立吗？'))

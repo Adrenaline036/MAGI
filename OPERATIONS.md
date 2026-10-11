@@ -49,23 +49,22 @@ DSH_HOME = '<DSH 数据目录>'
 ## 回复回推
 
 ```text
-node <插件目录>/tools/transport/push-to-codex.mjs --thread <来源线程 UUID> --message-file <正文文件>
-node <插件目录>/tools/transport/push-to-codex.mjs --title "<明确指定的对话标题>" --message-file <正文文件>
+node <插件目录>/lib/reply.mjs --thread <来源线程 UUID> --message-file <正文文件>
 ```
 
-正文原样保留，尾部附 `[DSH]` 来源标记。默认 `steer` 使用桌面发送入口；需要等当前回合结束时显式加 `--mode followup`。
+正文原样保留，尾部附 `[DSH]` 来源标记。发送策略由插件固定为桌面发送入口，项目不能选择模式。
 
-默认讨论回推拒绝仅用 `--project` 选择最近会话。排队模式保留项目选择器，但对已有提问的回复仍应使用来源线程。
+统一入口拒绝项目或标题推断，回复必须使用明确的来源线程。旧 `tools/transport/push-to-codex.mjs` 仅转交统一入口，不保留队列分支。
 
 `ask_dsh` 会自动登记来源线程和当前桌面端点。旧 MCP 尚未重新启动时，可以在目标 Codex 对话的 shell 中手动登记：
 
 ```text
-node <插件目录>/tools/transport/push-to-codex.mjs --register-desktop --thread <线程 UUID>
+node <插件目录>/lib/reply.mjs --register-desktop --thread <线程 UUID>
 ```
 
 该命令必须运行在具有当前 Codex 桌面环境的进程中。跨重启验收时不要手工登记，否则无法证明自动路径有效。
 
-回执 `accepted` 只表示桌面受理；`queued` 表示明确使用了排队路径。遇到结果未知的错误，先检查目标线程中的正文，避免重复发送。
+回执 `accepted` 只表示桌面受理。回执按次保存在 `$CODEX_HOME/collabridge-replies/`，只记录目标、正文指纹与受理状态，不保存正文。遇到结果未知的错误，先检查目标线程中的正文，避免重复发送。
 
 ## 外审
 
@@ -103,13 +102,14 @@ node <插件目录>/lib/cli.mjs routes
 源码中的离线测试：
 
 ```text
+node test/reply.test.mjs
 node test/codex-desktop-delivery.test.mjs
 node test/review-execution-guard.test.mjs
 node test/bridge.test.mjs
 node test/review-bridge.test.mjs
 ```
 
-前两组为定向测试。后两组会创建并清理临时夹具；如果本机规定删除必须进入回收站，应先使用符合该规定的测试执行环境，不能直接运行清理步骤。
+前三组为定向测试。后两组会创建并清理临时夹具；如果本机规定删除必须进入回收站，应先使用符合该规定的测试执行环境，不能直接运行清理步骤。
 
 实机验收应确认：新进程加载了目标入口；正常 `ask_dsh` 自动生成匹配当前桌面的端点；DSH 日志有对应的 `plugin:collabridge` 入站；Codex 目标线程出现完整回复；运行中的回合无需结束即可接收。
 

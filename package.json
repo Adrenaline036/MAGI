@@ -1,6 +1,6 @@
 {
   "name": "dsh-collabridge",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "private": true,
   "description": "连接 Codex 与 DeepSeek Harness 既有会话，支持双向引导投递、会话定位和独立代码外审",
   "keywords": [
