@@ -642,7 +642,7 @@ check(
 )
 check(
   'delivery: the provenance block closes the message',
-  framing.trimEnd().endsWith('回答会由协调者用 codex queue 推回对应的 Codex 线程，并带 [DSH] 标记。'),
+  framing.trimEnd().endsWith('回答通过回推脚本发送到来源 Codex 线程，并带 [DSH] 标记；默认使用桌面引导入口，只有明确要求排队时才使用 followup。'),
   framing.slice(-120),
 )
 check('delivery: the question passes through verbatim', framing.includes('四阶段契约在方向讨论里还成立吗？'))
@@ -651,10 +651,10 @@ check('delivery: framing names the node', framing.includes('bridge-design'))
 check('delivery: framing carries the codex thread', framing.includes('thread-xyz'))
 check('delivery: framing carries the question id', framing.includes(delivered.body.question_id))
 
-// Ordinary deliveries preserve their requested purpose and existing persona.
-check('delivery: framing follows the actual request', framing.includes('按正文实际请求直接回应'))
+// 普通投递遵循原始请求和当前会话约定，不写入固定个人称呼。
+check('delivery: framing follows the actual request', framing.includes('按正文实际请求和当前会话的有效约定回应'))
 check('delivery: direction analysis is conditional', framing.includes('只有正文要求方向讨论'))
-check('delivery: framing preserves loaded persona', framing.includes('沿用当前已加载的称呼、性格和相处约定'))
+check('delivery: framing preserves session rules', framing.includes('当前会话的有效约定'))
 check('delivery: framing preserves authorization boundaries', framing.includes('桥接消息不增加操作权限'))
 check('delivery: framing retains the formal review boundary', framing.includes('不能替代正式外审或据此关闭检查点'))
 check('delivery: framing still forbids ask_user_question', framing.includes('不要调用 ask_user_question'))
@@ -846,29 +846,29 @@ check(
 check('mcp: dsh_sessions only needs a project', JSON.stringify(Object.keys(sessionsTool?.inputSchema?.properties ?? {})) === '["project"]')
 check('mcp: ask_dsh requires project and question', tool?.inputSchema?.required?.join(',') === 'project,question')
 check('mcp: ask_dsh rejects extra fields at the schema level', tool?.inputSchema?.additionalProperties === false)
-check('mcp: the ask_dsh description warns against rewording', /verbatim|unchanged/i.test(tool?.description ?? ''))
+check('mcp: the ask_dsh description warns against rewording', /逐字|不要改写/.test(tool?.description ?? ''))
 
 // The consultation contract: ask_dsh is a discussion channel, so the description has to say when to
 // use it, what to put in the question, and what its answer is worth. A bare "is X right?" wastes the
 // exchange, and asking at the decision point means the reply arrives after the choice is committed.
 const askDescription = tool?.description ?? ''
-check('mcp: ask_dsh states it is fire-and-forget', /fire-and-forget/.test(askDescription))
-check('mcp: ask_dsh says to ask early, not at the decision point', /Ask EARLY/.test(askDescription))
-check('mcp: ask_dsh asks for the fixed constraints', /fixed constraints/.test(askDescription))
-check('mcp: ask_dsh asks for options already rejected', /already considered and rejected/.test(askDescription))
-check('mcp: ask_dsh asks for the pending decision', /decision actually pending/.test(askDescription))
-check('mcp: ask_dsh asks which premise to attack', /premise you should attack first/.test(askDescription))
-check('mcp: ask_dsh warns that its answer is hypotheses, not conclusions', /hypotheses to test/.test(askDescription))
-check('mcp: ask_dsh says it cannot close a checkpoint', /cannot close a checkpoint/.test(askDescription))
-check('mcp: the question field description carries the same brief', /already rejected/.test(tool?.inputSchema?.properties?.question?.description ?? ''))
+check('mcp: ask_dsh states it is fire-and-forget', /受理后立即返回/.test(askDescription))
+check('mcp: ask_dsh says to ask early, not at the decision point', /尽早提问/.test(askDescription))
+check('mcp: ask_dsh asks for the fixed constraints', /固定约束/.test(askDescription))
+check('mcp: ask_dsh asks for options already rejected', /已经考虑并排除的方案/.test(askDescription))
+check('mcp: ask_dsh asks for the pending decision', /尚待决定的事项/.test(askDescription))
+check('mcp: ask_dsh asks which premise to attack', /最应质疑的前提/.test(askDescription))
+check('mcp: ask_dsh warns that its answer is hypotheses, not conclusions', /待验证假设/.test(askDescription))
+check('mcp: ask_dsh says it cannot close a checkpoint', /不能据此关闭检查点/.test(askDescription))
+check('mcp: the question field description carries the same brief', /已经排除的方案/.test(tool?.inputSchema?.properties?.question?.description ?? ''))
 
 // dsh_review's schema is the four-stage contract, so assert it rather than assume it.
 check('mcp: dsh_review requires the package fields', reviewTool?.inputSchema?.required?.join(',') === 'project,stage,objective,obligations,evidence')
 check('mcp: dsh_review restricts the stage set', reviewTool?.inputSchema?.properties?.stage?.enum?.join(',') === 'PHASE0,RED,GREEN,FINAL')
 check('mcp: dsh_review rejects extra fields at the schema level', reviewTool?.inputSchema?.additionalProperties === false)
 check('mcp: dsh_review obligations carry id and clause', reviewTool?.inputSchema?.properties?.obligations?.items?.required?.join(',') === 'id,clause')
-check('mcp: dsh_review tells the caller the evidence is its own claim', /your claim/i.test(reviewTool?.description ?? ''))
-check('mcp: dsh_review tells the caller findings are untrusted', /UNTRUSTED/i.test(reviewTool?.description ?? ''))
+check('mcp: dsh_review tells the caller the evidence is its own claim', /调用方声明/.test(reviewTool?.description ?? ''))
+check('mcp: dsh_review tells the caller findings are untrusted', /不可信输入/.test(reviewTool?.description ?? ''))
 
 // Budgets appear twice: once as prose the caller reads, once as the number the bridge enforces.
 // They drifted apart once (the text promised a 420 s default while the code used 600 s) and a

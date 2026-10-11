@@ -1,9 +1,5 @@
-# dsh-collabridge bundle patch
-#
-# Mounts the collaboration bridge into the profile loader. `name` must resolve from the
-# profile's node_modules, which is what `dsh plugin --profile web add <this package>`
-# arranges. The plugin then owns a loopback HTTP endpoint that receives questions from
-# outside (Codex) and admits them into a live collaboration session.
+# 将协作桥挂载到 DSH 配置的插件组合中。
+# 包名必须能从该配置的 node_modules 解析；宿主只监听本机回环地址。
 - insert:
     - id: collabridge
       name: 'dsh-collabridge'

@@ -1,17 +1,13 @@
 #!/usr/bin/env node
 // Push a DSH answer back into the Codex thread that asked.
 //
-// Until now this was a manual step: find which Codex thread belongs to the project, then
-// queue the message. This automates the lookup by matching the newest rollout whose
-// recorded cwd is the project, and it does the queueing in Node so long messages with
-// punctuation never pass through a shell.
-//
-// The message is delivered as a normal user turn, which is the point: Codex receives DSH's
-// words, not Codex's summary of them.
+// Discussion uses the desktop app's active-turn delivery. Explicit followup uses the CLI
+// queue. The original answer and provenance are passed without shell interpolation.
 
 import { spawn } from 'node:child_process'
 import { appendFileSync, existsSync, openSync, readSync, closeSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { deliveryMode, registerDesktopTarget, sendDesktopMessage } from '../../lib/codex-desktop-delivery.mjs'
 
 const codexHome = join(process.env.USERPROFILE, '.codex')
 const sessionsRoot = join(codexHome, 'sessions')
@@ -325,10 +321,27 @@ export function resolveTarget({ flags, codexHome, sessionsDir } = {}) {
   return { ok: true, thread: byProject, resolvedBy: 'project' }
 }
 
+export function resolveDeliveryTarget({ flags, mode = 'steer', ...options }) {
+  if (mode === 'steer' && !('thread' in flags) && !('title' in flags)) {
+    return { ok: false, reason: 'explicit_target_required', hint: 'Desktop discussion requires --thread from the question framing, or an explicitly requested --title.' }
+  }
+  if ('thread' in flags && (typeof flags.thread !== 'string' || !flags.thread.trim())) {
+    return { ok: false, reason: 'thread_required', hint: '--thread requires a non-empty thread id.' }
+  }
+  return resolveTarget({ flags, ...options })
+}
+
 async function main() {
   const flags = parseFlags(process.argv.slice(2))
+  if (flags['register-desktop']) {
+    const receipt = registerDesktopTarget({ thread: flags.thread })
+    if (!receipt) throw new Error('Run registration inside the target Codex chat; CODEX_APP_TOOLS_PIPE_PATH is missing')
+    process.stdout.write(`${JSON.stringify({ ok: true, registered: flags.thread, receipt })}\n`)
+    return
+  }
+  const mode = deliveryMode(flags.mode)
   if (!flags.project && !flags.title && !flags.thread) {
-    throw new Error('usage: push-to-codex.mjs [--project <path> | --title <thread title> | --thread <id>] --message-file <f> [--question-id <id>] [--basis <text>] [--dry-run]\n(a flag\'s value must not itself begin with --, so pass such text through --message-file)')
+    throw new Error('usage: push-to-codex.mjs [--project <path> | --title <thread title> | --thread <id>] --message-file <f> [--mode steer|followup] [--question-id <id>] [--basis <text>] [--dry-run]\nRegister a desktop endpoint from Codex: --register-desktop --thread <id>\n(a flag\'s value must not itself begin with --, so pass such text through --message-file)')
   }
 
   const { readFileSync } = await import('node:fs')
@@ -336,7 +349,7 @@ async function main() {
   if (typeof raw !== 'string' || raw.trim().length === 0) throw new Error('a non-empty --message-file or --message is required')
 
   // Most explicit wins: an id, then a named title, then the project's most recent thread.
-  const target = resolveTarget({ flags })
+  const target = resolveDeliveryTarget({ flags, mode })
   if (!target.ok) {
     process.stdout.write(`${JSON.stringify({ ok: false, code: target.reason, requested: target.requested, hint: target.hint, matches: target.matches, candidates: target.candidates, project: target.project }, null, 2)}\n`)
     process.exitCode = 3
@@ -356,6 +369,7 @@ async function main() {
     thread_fresh: thread.fresh,
     message_length: message.length,
     dry_run: Boolean(flags['dry-run']),
+    delivery_mode: mode,
   }
 
   if (flags['dry-run']) {
@@ -363,12 +377,16 @@ async function main() {
     return
   }
 
-  const result = await queueMessage({ thread: thread.id, message })
-  record.queue_exit = result.code
-  record.queue_stdout = result.stdout.trim().slice(0, 300)
+  const result = mode === 'followup'
+    ? await queueMessage({ thread: thread.id, message })
+    : await sendDesktopMessage({ thread: thread.id, message })
+  record.transport = result.transport ?? 'codex-queue'
+  record.delivery = result.delivery ?? (result.code === 0 ? 'queued' : 'failed')
+  record.transport_exit = result.code
+  record.transport_stdout = result.stdout.trim().slice(0, 300)
   if (result.code !== 0) {
     record.ok = false
-    record.queue_stderr = result.stderr.trim().slice(0, 300)
+    record.transport_stderr = result.stderr.trim().slice(0, 300)
     process.exitCode = 1
   } else {
     try {

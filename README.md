@@ -1,171 +1,87 @@
 # Collabridge
 
-**Ask a live DeepSeek Harness session from Codex, and get a verdict you can cite.**
+让 Codex 与 DeepSeek Harness（DSH）的既有会话协作，并对代码候选执行独立外审。
 
-Collabridge is a [DeepSeek Harness](https://github.com/deepseek-ai) (DSH) plugin plus an MCP stdio
-server. It gives a coding agent two abilities it does not otherwise have:
+Collabridge 包含 DSH 宿主插件、Codex MCP 服务和回复回推脚本。讨论消息可以进入正在运行的回合；正式外审独立启动审查者，返回与候选内容绑定的结构化裁决。
 
-| Tool | What it does |
+## 功能
+
+| 入口 | 用途 |
 |---|---|
-| `ask_dsh` | Delivers a question into a **live, already-running** DSH collaboration session and returns immediately. The session answers in its own time, in its own context, with the user's own project state in front of it. |
-| `dsh_review` | Runs an **independent reviewer** against a candidate directory at a checkpoint (stage `PHASE0` / `FINAL` / `GREEN` / `RED`) and returns a verdict: findings, unknowns, and structural limits. The verdict is bound to an exact package id and nonce, so it cannot be replayed onto a different candidate. |
+| `ask_dsh` | 把问题原文交给指定 DSH 会话，异步接收带 `[DSH]` 来源标记的回复。 |
+| `dsh_sessions` | 查看项目内的会话标题、活动时间和运行状态。 |
+| `dsh_review` | 执行只读独立外审，返回 `PASS`、`FAIL`、问题、未知项及审查环境限制。 |
 
-The point of `ask_dsh` is that the answer comes from a session that has been working in that project,
-not from a fresh stateless call. The point of `dsh_review` is that the verdict is **not** produced by
-the agent that wrote the code.
+讨论默认使用 `steer`：DSH 在当前回合的下一步边界接收消息，空闲时启动回合。只有明确希望排队时才使用 `followup`；`inject` 只补充上下文，不唤醒空闲会话。
 
-The four constraints that shaped the design, and why the plugin has the shape it has, are in
-[ARCHITECTURE.md](ARCHITECTURE.md).
+DSH 回推默认通过 Codex 桌面的 `send_message_to_thread` 入口发送。来源线程和桌面端点由 `ask_dsh` 自动登记；显式 `--mode followup` 才调用 `codex queue`。发送失败或结果不确定时会报错，不自动重试或退回排队。
 
-## Why this has to be a plugin
+## 安装与连接
 
-Every Host RPC method and WebSocket stream on the DSH HTTP carrier requires the browser session
-cookie. The carrier accepts no query token and no `Authorization` header token outside the
-`GET /?token=...` root exchange, so an external process cannot reach `session/prompt`;
-unauthenticated requests get `401`.
+需要可运行插件的 DSH、Codex 桌面应用，以及支持 ESM 和 `node:zlib` Zstandard 接口的 Node.js。外审还需要本机可用的模型凭据。回推依赖 Codex 桌面随附的 `codex-app-tools` MCP。
 
-A plugin lives inside the trusted composition instead. It owns a loopback endpoint, receives a
-question from outside, and admits it into a live session as a real inbound message. That is the whole
-reason Collabridge is shaped like a plugin rather than a client script.
+1. 在适合停止相关任务的窗口安装版本包：
 
-## Install
-
-Collabridge is a DSH bundle patch: it is installed into a profile's `node_modules` and listed in that
-profile's bundle list.
-
-1. Put the package where the profile can resolve it:
+   ```text
+   dsh plugin --profile <配置名> add file:<安装包绝对路径>
    ```
-   dsh plugin --profile <profile> add file:<path-to>/dsh-collabridge-<version>.tgz
-   ```
-   If the profile is app-managed (the desktop profile refuses CLI management with
-   `profile "<name>" is managed exclusively by the Electron application`), add the dependency and the
-   bundle entry to the profile's `package.json` yourself, update its lock and
-   `node_modules/.modules.yaml`, and unpack the tarball into `node_modules/dsh-collabridge`.
-2. Restart DSH so the composition picks up the bundle.
-3. Register the Codex side. Paste this into `~/.codex/config.toml` and restart Codex:
+
+   如果配置由桌面应用独占管理，请使用应用支持的插件管理流程。修改热重载配置前应停止 DSH，并备份配置、依赖清单和锁文件。
+
+2. 重启 DSH，使宿主插件载入新代码。仅替换磁盘文件不能证明运行进程已升级。
+3. 在 Codex 的 `config.toml` 中注册 MCP，然后重启 Codex：
 
    ```toml
    [mcp_servers.dshCollab]
-   command = '<path to node.exe>'
-   tool_timeout_sec = 1800            # a review runs a full external reviewer
-   args = ['<DSH_HOME>\profiles\<profile>\node_modules\dsh-collabridge\lib\mcp-server.mjs']
+   command = '<Node.js 可执行文件绝对路径>'
+   args = ['<插件目录>\lib\mcp-server.mjs']
+   env_vars = ['CODEX_APP_TOOLS_PIPE_PATH', 'CODEX_THREAD_ID', 'CODEX_HOME']
+   tool_timeout_sec = 1800
 
    [mcp_servers.dshCollab.tools.ask_dsh]
    approval_mode = "approve"
 
    [mcp_servers.dshCollab.env]
-   DSH_HOME = '<DSH_HOME>'
+   DSH_HOME = '<DSH 数据目录>'
    ```
-   `tool_timeout_sec` matters: Codex's default call deadline is around 300 s and a review can take
-   longer than that.
-4. Route projects to sessions (see below).
-5. Verify with `node --test test/bridge.test.mjs` and `node --test test/review-bridge.test.mjs`.
 
-**Upgrading from the old name.** Releases before 0.6.0 were published as `dsh-collab-bridge`. A
-profile that still lists that name must have its dependency, bundle entry and lock entries removed
-first: two installed copies would both mount a host half and fight over the same loopback port.
+   `env_vars` 负责向 MCP 传递本次桌面端点和来源信息。不能把某次运行的管道地址写死进配置。
 
-## Routing: which conversation gets the question
+4. 在 DSH 打开目标会话，用 `dsh_sessions` 核对后，通过 `session`、`node` 或 `title` 定位。
+5. 检查目标 DSH 日志和 Codex 线程里的实际入站正文，完成双向验收。
 
-A question is addressed to a **project**, and when that workspace holds several conversations at once,
-to one of them by name. The caller can name a target in three ways, and naming nothing keeps the older
-milestone behaviour.
+从 `dsh-collab-bridge` 旧包名升级时，应在停机窗口核对旧依赖和插件挂载，避免同时加载两个宿主实例。
 
-| Selector | What the caller passes | Typical use |
-|---|---|---|
-| `title` | The title the conversation shows in its own window, or a distinctive part of it | "route this to the conversation called 恢复 Ctrl+Enter 示例功能" |
-| `node` | A route label registered for the project | A milestone line, such as `phase0` or `bridge-maintain` |
-| `session` | A session id, or a unique prefix of it | When two conversations share a title |
+## 会话定位
 
-Resolution order:
+定位优先级为 `session` → `node` → `title` → 项目当前节点路由 → 默认路由 → 工作区最近会话。
 
-1. `session` (exact id, else a unique id prefix)
-2. `node` (a registered label; an unregistered label is refused, not redirected)
-3. `title` (an exact title wins; otherwise a title containing the text wins if it is the only one)
-4. `routes[project.node]`
-5. `routes[project].default`
-6. the newest conversation of the workspace
-7. unresolved, reported as such
+显式指定的会话、路由标签或标题若不存在、匹配多项或已关闭，桥会拒绝并返回原因，不改投到其他目标。正式使用时优先明确来源与收件会话；会话 UUID 属于本机状态，不能跨机器照抄。
 
-Naming something that matches nothing, or more than one conversation, is **refused with the list of
-conversations** instead of being guessed at: a question delivered to the wrong conversation is worse
-than a question the caller has to re-address. A title that names a conversation which is no longer
-live is refused distinctly, rather than falling back to the project's default.
+回复应使用提问框架中的来源线程：
 
-Where a conversation's title comes from: the host writes it as a durable `session/title` event, first
-derived from the opening prompt and refined afterwards, so the latest one is what the window shows.
-`dsh_sessions` (or `collab-cli sessions`) lists the conversations of a workspace with their titles,
-when each was last written to, and the last thing the user said in it.
-
-The zero-configuration fallback matches a conversation by its workspace directory. Recency is taken
-from the newest file inside the session directory, not from the directory's own timestamp: the latter
-only moves when entries are added or removed, so a conversation running for days would keep reporting
-its creation moment.
-
-```jsonc
-// $DSH_HOME/collab-routing.json
-{
-  "version": 1,
-  "projects": {
-    "/path/to/project": {
-      "node": "phase0",
-      "routes": { "phase0": "<session-id>", "default": "<session-id>" }
-    }
-  }
-}
+```text
+node <插件目录>/tools/transport/push-to-codex.mjs --thread <来源线程 UUID> --message-file <正文文件>
 ```
 
-A session id is a per-machine fact. Never copy one between machines. A **label**, on the other hand, is
-a name a person chose, so it is worth agreeing on across machines even though the ids behind it differ.
+默认回推拒绝仅凭 `--project` 猜收件人。用户明确指定另一对话时可以使用 `--title`；需要排队时加 `--mode followup`。
 
-### Naming a conversation from inside it
+## 独立外审
 
-`$DSH_SESSION_ID` is exported into every process a conversation starts, so a conversation can register
-its own label without anybody looking an id up:
+外审阶段包括 `PHASE0`（方案）、`RED`（预期失败）、`GREEN`（实现与测试）和 `FINAL`（集成候选）。调用方声明目标、审查条款、候选路径、测试命令与证据。
 
-```
-collab-cli label --as perf        # run inside the conversation; uses its own session id and cwd
-```
+- `candidate_paths` 限定参与指纹计算的代码和测试，避免把日志、审查输出纳入候选。
+- 桥先运行声明测试，再把原始输出交给只读审查者；审查者只能执行声明范围内的命令。
+- 裁决绑定 `package_id`、随机 `nonce` 和候选指纹；候选在审查过程中变化会被记录。
+- 有问题或未知项时不能判为 `PASS`。只读环境无法执行的验证单列为 `structural_limits`，不能伪装成已验证事实。
+- 普通讨论回复不构成正式审查证据。
 
-That registers `perf` for this workspace without changing the project's current node. Add `--current`
-to move the project onto it as well. Afterwards the conversation can be addressed with
-`ask_dsh(project, node: "perf")` from anywhere.
+## 运行边界与隐私
 
-Two state files keep names that predate the rename: the discovery file
-(`$DSH_HOME/collab-bridge.json`, holding host/port/token/pid) and the audit log
-(`$DSH_HOME/collab-bridge.log.jsonl`). The running host and existing tooling read them, so the names
-were left alone; both are rewritten whenever the host restarts, so a value read from them describes
-one moment only.
+宿主只监听本机回环地址。发现文件包含访问令牌，路由文件、会话日志、桌面端点登记和审查证据均属于本机运行数据，不应提交到仓库或打进安装包。
 
-## The review contract
+受理回执只证明请求被接纳。是否送达，要看目标会话的实际入站记录；是否完成处理，要看后续执行结果。`MALFORMED_RESPONSE` 等模型错误应按提供方配置处理，插件升级不会自动修改用户的重试策略。
 
-`dsh_review` is a checkpoint gate, so its rules are strict on purpose:
+项目说明、安装包内容和测试不含真实会话 ID、个人称呼或本机用户目录。示例使用占位符和合成数据；协议字段、命令、错误码及标准许可证名称保留原拼写。
 
-- The caller supplies a **package** (`package_id`, stage, objective, obligations, candidate paths,
-  evidence) and receives a **nonce**.
-- The reviewer must answer with `package_id` and `nonce` matching exactly. Verdicts that do not match
-  are rejected, which is what stops a verdict from being reused on another candidate.
-- `verdict` is `PASS` only when there are no findings and no unknowns.
-- **`unknowns` force a non-`PASS`** result. An unknown is "I could not determine this", and it is not
-  allowed to masquerade as a pass.
-- The reviewer runs in a **read-only sandbox** and cannot write. Anything it therefore could not
-  verify is reported separately as a **structural limit**, which is explicitly *not* a finding about
-  the candidate and does not change the verdict.
-- The candidate's identity is hashed before and after the review. If the tree changed while the
-  reviewer was reading it, that is reported.
-
-## Status and limits
-
-- The reviewer is a headless DSH profile running an external model. It needs credentials on the
-  device. The plugin detects an account grant in the credential store and otherwise needs
-  `DSH_COLLAB_REVIEW_PROVIDER` / `DSH_COLLAB_REVIEW_MODEL`.
-- Inbound relay framing text is written in Chinese, because the operator this was built for is
-  Chinese-speaking. Everything else in the code is English.
-- The offline suites (158 + 243 checks) are pure: no network, no provider call, no cost.
-- Collabridge was extracted from one developer's working setup. It is published because the two
-  problems it solves (reaching a live session, and getting a non-self verdict) are general, not
-  because it is a finished product.
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+详细结构见 [架构说明](ARCHITECTURE.md)，配置、验证和排障见 [运维说明](OPERATIONS.md)。许可证为 [MIT](LICENSE)。

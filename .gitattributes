@@ -1,6 +1,4 @@
-# Keep the sources byte-identical across platforms. The plugin is installed from a tarball whose
-# integrity is recorded in the profile's lock, so a checkout that rewrites line endings would produce
-# files that no longer match the reviewed artifact.
+# 固定文本换行为 LF，使跨平台检出内容与已审查安装包一致。
 * text=auto eol=lf
 *.png binary
 *.tgz binary
