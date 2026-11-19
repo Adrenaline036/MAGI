@@ -13,12 +13,14 @@ HANDOFF.md
 *.log.jsonl
 *.jsonl
 .credentials.yaml
-collab-bridge.json
-collab-routing.json
-collabridge-desktop-targets/
+magi.json
+magi-routing.json
+magi-desktop-targets/
 
 # 编辑器与系统文件
 .vscode/
 .idea/
 Thumbs.db
 Desktop.ini
+
+历史资料/

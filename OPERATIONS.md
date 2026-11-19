@@ -9,16 +9,16 @@
 ## Codex MCP
 
 ```toml
-[mcp_servers.dshCollab]
+[mcp_servers.magi]
 command = '<Node.js 可执行文件绝对路径>'
 args = ['<插件目录>\lib\mcp-server.mjs']
 env_vars = ['CODEX_APP_TOOLS_PIPE_PATH', 'CODEX_THREAD_ID', 'CODEX_HOME']
 tool_timeout_sec = 1800
 
-[mcp_servers.dshCollab.tools.ask_dsh]
+[mcp_servers.magi.tools.magi_ask_dsh]
 approval_mode = "approve"
 
-[mcp_servers.dshCollab.env]
+[mcp_servers.magi.env]
 DSH_HOME = '<DSH 数据目录>'
 ```
 
@@ -28,7 +28,7 @@ DSH_HOME = '<DSH 数据目录>'
 
 ## 定位与标签
 
-先通过 `dsh_sessions` 核对会话，再在 `ask_dsh` 中传 `session`、`node` 或 `title`。标题完全匹配优先，其次要求包含匹配唯一；会话 UUID 前缀也必须唯一。
+先通过 `magi_dsh_sessions` 核对会话，再在 `magi_ask_dsh` 中传 `session`、`node` 或 `title`。标题完全匹配优先，其次要求包含匹配唯一；会话 UUID 前缀也必须唯一。
 
 路由文件示例：
 
@@ -56,7 +56,7 @@ node <插件目录>/lib/reply.mjs --thread <来源线程 UUID> --message-file <�
 
 统一入口拒绝项目或标题推断，回复必须使用明确的来源线程。旧 `tools/transport/push-to-codex.mjs` 仅转交统一入口，不保留队列分支。
 
-`ask_dsh` 会自动登记来源线程和当前桌面端点。旧 MCP 尚未重新启动时，可以在目标 Codex 对话的 shell 中手动登记：
+`magi_ask_dsh` 会自动登记来源线程和当前桌面端点。旧 MCP 尚未重新启动时，可以在目标 Codex 对话的 shell 中手动登记：
 
 ```text
 node <插件目录>/lib/reply.mjs --register-desktop --thread <线程 UUID>
@@ -64,7 +64,7 @@ node <插件目录>/lib/reply.mjs --register-desktop --thread <线程 UUID>
 
 该命令必须运行在具有当前 Codex 桌面环境的进程中。跨重启验收时不要手工登记，否则无法证明自动路径有效。
 
-回执 `accepted` 只表示桌面受理。回执按次保存在 `$CODEX_HOME/collabridge-replies/`，只记录目标、正文指纹与受理状态，不保存正文。遇到结果未知的错误，先检查目标线程中的正文，避免重复发送。
+回执 `accepted` 只表示桌面受理。回执按次保存在 `$CODEX_HOME/magi-replies/`，只记录目标、正文指纹与受理状态，不保存正文。遇到结果未知的错误，先检查目标线程中的正文，避免重复发送。
 
 ## 外审
 
@@ -74,7 +74,7 @@ node <插件目录>/lib/reply.mjs --register-desktop --thread <线程 UUID>
 
 审查者使用只读沙箱。声明之外的命令会被拒绝，不能把这种拒绝直接视为插件误拒。审查环境的结构限制会单独记录；作者执行的补充验证应明确来源。
 
-模型路由优先使用 `DSH_COLLAB_REVIEW_PROVIDER` 和 `DSH_COLLAB_REVIEW_MODEL`。未显式指定时，桥检查本机是否存在账号授权，再选择可用的 DSH 路由；不会输出凭据内容。
+模型路由优先使用 `MAGI_REVIEW_PROVIDER` 和 `MAGI_REVIEW_MODEL`。未显式指定时，桥检查本机是否存在账号授权，再选择可用的 DSH 路由；不会输出凭据内容。
 
 ## 诊断接口
 
@@ -111,7 +111,7 @@ node test/review-bridge.test.mjs
 
 前三组为定向测试。后两组会创建并清理临时夹具；如果本机规定删除必须进入回收站，应先使用符合该规定的测试执行环境，不能直接运行清理步骤。
 
-实机验收应确认：新进程加载了目标入口；正常 `ask_dsh` 自动生成匹配当前桌面的端点；DSH 日志有对应的 `plugin:collabridge` 入站；Codex 目标线程出现完整回复；运行中的回合无需结束即可接收。
+实机验收应确认：新进程加载了目标入口；正常 `magi_ask_dsh` 自动生成匹配当前桌面的端点；DSH 日志有对应的 `plugin:magi` 入站；Codex 目标线程出现完整回复；运行中的回合无需结束即可接收。
 
 依赖重装验证需在停机窗口执行 `pnpm install --frozen-lockfile`，比较执行前后的依赖记录和安装文件。解析成功或文件暂时一致不能替代这项验证。
 
@@ -120,3 +120,37 @@ node test/review-bridge.test.mjs
 发布内容按白名单确定。排除本机路由、发现文件、端点收据、凭据、对话正文、审查记录、个人交接和临时诊断脚本。检查当前文件、安装包及 Git 历史；删除当前文件里的信息不会自动清理历史提交。
 
 项目说明、工具参数说明和示例使用中文。协议标识符、命令、错误码、源码标识符及 MIT 许可证原文保留原拼写。示例中的路径、线程和令牌必须是占位符或明显的合成数据。
+
+## 三端定向消息
+
+在 MAGI 开发目录中，Codex 与 DSH 可通过命令行发给一个指定会话。目标和来源均使用完整地址，形式为 `codex/<线程 UUID>`、`dsh/session-<会话 UUID>` 或 `antigravity/<会话 UUID>`。首次发往 DSH 或由 DSH 发起时需提供其工作区路径。开发版 MCP 提供相同语义的 `magi_message`，参数为 `text`、`to` 或 `replyTo`，以及按需填写的 `from`、`project`。
+
+```text
+node lib/message.mjs send <目标地址> "<正文>" <来源地址> [DSH工作区]
+node lib/message.mjs reply <原消息UUID> "<正文>" <本会话地址>
+```
+
+Antigravity 使用 MAGI 工作区内的 Python 入口，参数顺序与上面相同。正式版中一次启用「MAGI 会话路由」后，Sidecar 负责按会话投递，同时转交工作区的出站请求。
+
+```text
+python3 .agents/magi/antigravity-message.py send <目标地址> "<正文>" <本会话地址> [DSH工作区]
+python3 .agents/magi/antigravity-message.py reply <原消息UUID> "<正文>" <本会话地址>
+```
+
+每封入站消息末尾附有对应的回复命令。收件人可替换正文直接回信，MAGI 从原消息记录中读取回程地址。Windows 用户目录下的 `.magi/messages` 保留路由数据。Antigravity 工作区需启用「MAGI 发件来源核验」钩子。请单独执行一条 Python 发件命令。宿主完成工具调用时，钩子核对实际会话 ID 与命令来源。派发前，入口还会核实该会话对应步号的命令和输出摘要。同一步只可派发一次。该校验适用于同一用户控制的可信本机和工作区。
+
+Antigravity 请求的本地回执保存在 `.agents/magi/outbox/<请求UUID>.result`。登记后，转交进程会记录一次派发尝试。遇到宿主中断或回执不明时，先用消息编号和正文核对目标会话入站，再决定是否重发。
+
+## 广播通知
+
+在 MAGI 开发入口执行 `node lib/message.mjs broadcast <组名> "<正文>" <本会话地址>`。Antigravity 在工作区执行 `python3 .agents/magi/antigravity-message.py broadcast <组名> "<正文>" <本会话地址>`。开发版 MCP 工具 `magi_message` 可传入 `group` 与 `text`，宿主未提供会话地址时另传 `from`。
+
+组定义位于 Windows 用户目录的 `.magi/groups/<组名>.json`。组名使用小写字母、数字和连字符。`members` 数组分别绑定三个客户端的完整会话地址，`project` 指向 DSH 会话的工作区。成员发出一条通知后，另外两个成员各收到一份。两份共用广播编号，各有自己的回复命令，普通回复只回原发送会话。
+
+广播清单和逐目标回执位于 `.magi/messages`，文件后缀分别为 `.broadcast.json` 与 `.broadcast-result.json`。回执中的 `accepted` 表示目标宿主已受理；一端状态不明时，按广播编号查该端入站记录，避免重复广播。
+
+## 安装 Antigravity 组件
+
+在 WSL Ubuntu 中使用包内的 `tools/setup-antigravity.py`，依次传入 Antigravity 实际挂载的工作区绝对路径、一个新的配置准备目录。脚本校验并准备工作区 Python 入口、工具钩子和 Sidecar 描述；在准备目录的清单中查看每个目标位置。在停机窗口备份已有配置，将钩子项合并至工作区的 `.agents/hooks.json`，将 Sidecar 描述安装到用户配置中对应的 magi-router 目录。其他钩子和 Sidecar 保持各自配置。首次在界面启用「MAGI 会话路由」。同一实例使用一个绑定工作区，测试及升级后保持其路径稳定。
+
+升级前检查旧发件目录的 ready、attempt 和 result，逐项核对未确认的投递；历史回执保留在原位置。新版本将出站状态保存在工作区的 `.agents/magi/outbox`，用户主目录的组定义和原消息记录继续供回复使用。DSH 首次读取路由时可沿用旧版的 collab-routing.json，新登记的路由写入 magi-routing.json。

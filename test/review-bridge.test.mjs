@@ -3,6 +3,7 @@
 // Fixtures include shapes and error texts observed in production.
 
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { isDeepStrictEqual } from 'node:util'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -199,11 +200,19 @@ check('prompt: omits the budget block when none is supplied', !/YOUR TIME BUDGET
 
 const promptPath = 'C:\\evidence\\reviewer-prompt.txt'
 const script = buildWorkflowScript(promptPath)
-check('script: calls agent with a schema', script.includes('await agent(') && script.includes('schema:'))
+let passedSchema, actualInstruction
+const sample = {verdict:'PASS'}
+const runWorkflow = new Function('agent', 'return (async () => {' + script + '})()')
+const actualReview = await runWorkflow((instruction, options) => {
+  passedSchema = options.schema
+  actualInstruction = instruction
+  return sample
+})
+check('script: 调用审查者并返回结构化结果', actualReview === sample && !!passedSchema)
 check('script: returns the validated object', script.trim().endsWith('return review;'))
-check('script: embeds the whole schema', script.includes(JSON.stringify(REVIEW_SCHEMA)))
+check('script: embeds the whole schema', isDeepStrictEqual(passedSchema, REVIEW_SCHEMA))
 check('script: points the reviewer at the prompt file', script.includes(promptPath.replace(/\\/g, '\\\\')), promptPath)
-check('script: tells the reviewer to read that file first', /Read that entire file first/.test(script))
+check('script: tells the reviewer to read that file first', actualInstruction.includes('Read ' + promptPath) && actualInstruction.includes('complete review instructions'))
 
 // Regression for a real failure: the conductor turned a log separator inside the embedded
 // evidence into a longer one, and the byte-for-byte guard rejected the whole run as
@@ -250,16 +259,12 @@ check(
 )
 
 const task = buildConductorTask(script, 'review-pkg-1')
-check('task: contains the script verbatim', task.includes(script))
-check('task: carries the workflow meta name', task.includes('"name":"review-pkg-1"'))
-// A real run sent meta/args as strings; the harness refused the call, no review ran, and the bridge
-// reported "the workflow result carried no Return value section" -- a formatting message for an
-// argument-type mistake. The task must now state the types outright.
-check('task: says meta and args are objects', /MUST BE PASSED AS OBJECTS/.test(task))
-check('task: warns against sending them as strings', /not as strings, not quoted/.test(task))
-check('task: gives an empty args object', /args -- an object, and it is empty:\s*\{\}/.test(task))
-check('task: tells it to fix an argument-type refusal', /refused because of the argument types/.test(task))
-check('task: demands verbatim copying', /copied EXACTLY and COMPLETELY/i.test(task))
+const toolArgs = JSON.parse(task.split('\n').find(line => line.startsWith('{"meta":')))
+check('task: 脚本经 JSON 解码后逐字一致', toolArgs.script === script)
+check('task: 工作流名称与输入一致', toolArgs.meta.name === 'review-pkg-1')
+check('task: 参数是空对象', isDeepStrictEqual(toolArgs.args, {}))
+check('task: 指令要求原样传入参数对象', task.includes('tool arguments object') && task.includes('without reconstructing'))
+check('task: 每份只调用一次 workflow', task.includes('workflow tool once'))
 
 // ---- validateReturn: accepted shapes ----------------------------------------
 
@@ -306,7 +311,7 @@ check('reject: obligations not supplied by the caller', unsupplied.valid === fal
 {
   const keys = ['LOCALAPPDATA', 'ProgramFiles', 'ProgramFiles(x86)', 'DSH_CLI_ENTRY', 'DSH_ELECTRON_EXE', 'DSH_NODE_EXE']
   const saved = Object.fromEntries(keys.map((key) => [key, process.env[key]]))
-  const root = mkdtempSync(join(tmpdir(), 'collab-appexe-'))
+  const root = mkdtempSync(join(tmpdir(), 'magi-appexe-'))
 
   const build = (caseName, appDirName, exes) => {
     const local = join(root, caseName, 'LocalAppData')
@@ -362,12 +367,12 @@ check('reject: obligations not supplied by the caller', unsupplied.valid === fal
 // that signs in with an account gets the account route and an API-key machine keeps the default.
 {
   const saved = {
-    DSH_COLLAB_REVIEW_PROVIDER: process.env.DSH_COLLAB_REVIEW_PROVIDER,
-    DSH_COLLAB_REVIEW_MODEL: process.env.DSH_COLLAB_REVIEW_MODEL,
+    MAGI_REVIEW_PROVIDER: process.env.MAGI_REVIEW_PROVIDER,
+    MAGI_REVIEW_MODEL: process.env.MAGI_REVIEW_MODEL,
   }
-  delete process.env.DSH_COLLAB_REVIEW_PROVIDER
-  delete process.env.DSH_COLLAB_REVIEW_MODEL
-  const home = mkdtempSync(join(tmpdir(), 'collab-cred-home-'))
+  delete process.env.MAGI_REVIEW_PROVIDER
+  delete process.env.MAGI_REVIEW_MODEL
+  const home = mkdtempSync(join(tmpdir(), 'magi-cred-home-'))
   const accountHome = join(home, 'account')
   const apiKeyHome = join(home, 'apikey')
   const emptyHome = join(home, 'empty')
@@ -385,18 +390,18 @@ check('reject: obligations not supplied by the caller', unsupplied.valid === fal
     const account = resolveReviewModel({ home: accountHome })
     check('model: an account grant selects the account route', account?.provider === 'deepseek-account', JSON.stringify(account))
     check('model: the choice records where it came from', /account grant/.test(account?.source ?? ''), String(account?.source))
-    check('model: an api-key store leaves the shipped default alone', resolveReviewModel({ home: apiKeyHome }) === null)
+    check('model: API 凭据引用选择官方 API 路线', resolveReviewModel({ home: apiKeyHome })?.provider === 'deepseek-official')
     check('model: a home with no credential store leaves the shipped default alone', resolveReviewModel({ home: emptyHome }) === null)
 
-    process.env.DSH_COLLAB_REVIEW_PROVIDER = 'some-other-route'
+    process.env.MAGI_REVIEW_PROVIDER = 'some-other-route'
     const envOnly = resolveReviewModel({ home: accountHome })
     check('model: an explicit provider wins over detection', envOnly?.provider === 'some-other-route' && envOnly?.source === 'environment', JSON.stringify(envOnly))
     check('model: an explicit provider keeps a usable default model', envOnly?.model === 'deepseek-flash', String(envOnly?.model))
-    process.env.DSH_COLLAB_REVIEW_MODEL = 'some-other-model'
+    process.env.MAGI_REVIEW_MODEL = 'some-other-model'
     check('model: an explicit model is used as given', resolveReviewModel({ home: accountHome })?.model === 'some-other-model')
 
     // The route names are interpolated into the patch file, so they must not be able to add entries.
-    process.env.DSH_COLLAB_REVIEW_PROVIDER = 'bad\n- id: injected'
+    process.env.MAGI_REVIEW_PROVIDER = 'bad\n- id: injected'
     let injectionError = ''
     try {
       resolveReviewModel({ home: accountHome })
@@ -431,7 +436,7 @@ check('reject: obligations not supplied by the caller', unsupplied.valid === fal
     DSH_NODE_EXE: process.env.DSH_NODE_EXE,
     DSH_ELECTRON_EXE: process.env.DSH_ELECTRON_EXE,
   }
-  const fakeDir = mkdtempSync(join(tmpdir(), 'collab-launch-'))
+  const fakeDir = mkdtempSync(join(tmpdir(), 'magi-launch-'))
   const fakeNode = join(fakeDir, 'node.exe')
   const fakeExe = join(fakeDir, 'DeepSeek Harness.exe')
   const archiveEntry = join(fakeDir, 'resources', 'app.asar', 'dsh', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
@@ -457,7 +462,7 @@ check('reject: obligations not supplied by the caller', unsupplied.valid === fal
 
     // With no interpreter for the archive, the message must name the variable to set: the raw
     // symptom is a MODULE_NOT_FOUND on a truncated path, which sends a reader after the wrong thing.
-    const soloDir = mkdtempSync(join(tmpdir(), 'collab-noexe-'))
+    const soloDir = mkdtempSync(join(tmpdir(), 'magi-noexe-'))
     delete process.env.DSH_ELECTRON_EXE
     process.env.DSH_CLI_ENTRY = join(soloDir, 'resources', 'app.asar', 'dsh', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
     let archiveError = ''
@@ -762,7 +767,7 @@ check('failed-agent: the marker is not read as an undeclared field', !/undeclare
 check('failed-agent: a bare null still reports as a non-object', validateReturn(pkg, NONCE, null).state === 'REVIEW_STRUCTURAL_INVALID')
 
 const scriptText = buildWorkflowScript('C:\\tmp\\prompt.txt')
-check('failed-agent: the script no longer returns a bare null', /reviewer_failed: true/.test(scriptText))
+check('failed-agent: the script no longer returns a bare null', (await runWorkflow(() => null))?.reviewer_failed === true)
 check('failed-agent: the script still returns the review when it exists', /return review;/.test(scriptText))
 
 // The failure extractor reads the harness's own turn record, not prose.

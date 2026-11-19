@@ -1,5 +1,5 @@
 # 将协作桥挂载到 DSH 配置的插件组合中。
 # 包名必须能从该配置的 node_modules 解析；宿主只监听本机回环地址。
 - insert:
-    - id: collabridge
-      name: 'dsh-collabridge'
+    - id: magi
+      name: 'magi'

@@ -280,7 +280,7 @@ export function resolveDeliveryTarget({ flags, mode = 'steer', ...options }) {
 
 if (process.argv[1] && import.meta.url === new URL('file:///' + process.argv[1].replace(/\\/g, '/')).href) {
   runReplyCli().then(result => process.stdout.write(JSON.stringify(result) + '\n')).catch(error => {
-    process.stderr.write(`collabridge reply: ${error.message}\n`)
+    process.stderr.write(`magi reply: ${error.message}\n`)
     process.exitCode = 1
   })
 }

@@ -1,20 +1,21 @@
-# Collabridge
+# MAGI
 
-让 Codex 与 DeepSeek Harness（DSH）的既有会话协作，并对代码候选执行独立外审。
+让 Codex、DeepSeek Harness（DSH）与 Antigravity 按会话收发消息；代码外审由 DSH 执行。
 
-Collabridge 包含 DSH 宿主插件、Codex MCP 服务和回复回推脚本。讨论消息可以进入正在运行的回合；正式外审独立启动审查者，返回与候选内容绑定的结构化裁决。
+MAGI 包含 DSH 宿主插件、Codex MCP 服务和回复回推脚本。讨论消息可以进入正在运行的回合；正式外审独立启动审查者，返回与候选内容绑定的结构化裁决。
 
 ## 功能
 
 | 入口 | 用途 |
 |---|---|
-| `ask_dsh` | 把问题原文交给指定 DSH 会话，异步接收带 `[DSH]` 来源标记的回复。 |
-| `dsh_sessions` | 查看项目内的会话标题、活动时间和运行状态。 |
-| `dsh_review` | 执行只读独立外审，返回 `PASS`、`FAIL`、问题、未知项及审查环境限制。 |
+| `magi_message` | 定向发送、回复原发件会话，或向绑定的三端会话组广播。 |
+| `magi_ask_dsh` | 把问题原文交给指定 DSH 会话，异步接收带 `[DSH]` 来源标记的回复。 |
+| `magi_dsh_sessions` | 查看项目内的会话标题、活动时间和运行状态。 |
+| `magi_dsh_review` | 执行只读独立外审，返回 `PASS`、`FAIL`、问题、未知项及审查环境限制。 |
 
 讨论默认使用 `steer`：DSH 在当前回合的下一步边界接收消息，空闲时启动回合。只有明确希望排队时才使用 `followup`；`inject` 只补充上下文，不唤醒空闲会话。
 
-DSH 回推默认通过 Codex 桌面的 `send_message_to_thread` 入口发送。来源线程和桌面端点由 `ask_dsh` 自动登记；项目只提交正文和明确来源线程，不能指定发送模式。发送失败或结果不确定时会报错，不自动重试或退回排队。
+DSH 回推默认通过 Codex 桌面的 `send_message_to_thread` 入口发送。来源线程和桌面端点由 `magi_ask_dsh` 自动登记；项目只提交正文和明确来源线程，不能指定发送模式。发送失败或结果不确定时会报错，不自动重试或退回排队。
 
 ## 安装与连接
 
@@ -32,25 +33,25 @@ DSH 回推默认通过 Codex 桌面的 `send_message_to_thread` 入口发送。�
 3. 在 Codex 的 `config.toml` 中注册 MCP，然后重启 Codex：
 
    ```toml
-   [mcp_servers.dshCollab]
+   [mcp_servers.magi]
    command = '<Node.js 可执行文件绝对路径>'
    args = ['<插件目录>\lib\mcp-server.mjs']
    env_vars = ['CODEX_APP_TOOLS_PIPE_PATH', 'CODEX_THREAD_ID', 'CODEX_HOME']
    tool_timeout_sec = 1800
 
-   [mcp_servers.dshCollab.tools.ask_dsh]
+   [mcp_servers.magi.tools.magi_ask_dsh]
    approval_mode = "approve"
 
-   [mcp_servers.dshCollab.env]
+   [mcp_servers.magi.env]
    DSH_HOME = '<DSH 数据目录>'
    ```
 
    `env_vars` 负责向 MCP 传递本次桌面端点和来源信息。不能把某次运行的管道地址写死进配置。
 
-4. 在 DSH 打开目标会话，用 `dsh_sessions` 核对后，通过 `session`、`node` 或 `title` 定位。
+4. 在 DSH 打开目标会话，用 `magi_dsh_sessions` 核对后，通过 `session`、`node` 或 `title` 定位。
 5. 检查目标 DSH 日志和 Codex 线程里的实际入站正文，完成双向验收。
 
-从 `dsh-collab-bridge` 旧包名升级时，应在停机窗口核对旧依赖和插件挂载，避免同时加载两个宿主实例。
+Antigravity 工作区组件和 Sidecar 的安装见 [运行说明](OPERATIONS.md)。
 
 ## 会话定位
 

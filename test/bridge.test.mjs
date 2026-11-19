@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Tests for dsh-collabridge. No DSH process, no network beyond loopback, no cost.
+// Tests for magi. No DSH process, no network beyond loopback, no cost.
 //
 // The plugin is exercised through a FAKE cordis context: `apply()` is called with a
 // minimal `agents` registry and an effect collector, so the real HTTP surface, the real
@@ -46,7 +46,7 @@ function check(name, condition, detail = '') {
 // Reading in that window must yield an empty event list, not ENOENT: in the review path a throw
 // here fails the whole package for a session that is perfectly healthy.
 {
-  const emptySession = mkdtempSync(join(tmpdir(), 'collab-empty-session-'))
+  const emptySession = mkdtempSync(join(tmpdir(), 'magi-empty-session-'))
   let threw = null
   let result = null
   try {
@@ -59,7 +59,7 @@ function check(name, condition, detail = '') {
   check('sessionlog: it reports zero bytes', result?.bytes === 0)
   rmSync(emptySession, { recursive: true, force: true })
 
-  const missingDir = join(tmpdir(), 'collab-definitely-absent-session-dir')
+  const missingDir = join(tmpdir(), 'magi-definitely-absent-session-dir')
   let missingThrew = null
   try {
     readSessionEvents(missingDir)
@@ -77,7 +77,7 @@ function check(name, condition, detail = '') {
 {
   const frame = (event) => zstdCompressSync(Buffer.from(`${JSON.stringify(event)}\n`, 'utf8'))
 
-  const v4Dir = mkdtempSync(join(tmpdir(), 'collab-v4-session-'))
+  const v4Dir = mkdtempSync(join(tmpdir(), 'magi-v4-session-'))
   const v4Event = { type: 'assistant/message', seq: 7, data: { usage: { inputTokens: 10, outputTokens: 4, cacheReadTokens: 2, totalTokens: 16 } } }
   writeFileSync(join(v4Dir, 'session.v4.jsonl.zstd'), frame(v4Event))
   const v4 = readSessionEvents(v4Dir)
@@ -91,7 +91,7 @@ function check(name, condition, detail = '') {
   )
   rmSync(v4Dir, { recursive: true, force: true })
 
-  const legacyDir = mkdtempSync(join(tmpdir(), 'collab-legacy-session-'))
+  const legacyDir = mkdtempSync(join(tmpdir(), 'magi-legacy-session-'))
   writeFileSync(
     join(legacyDir, 'session.jsonl.zstd'),
     frame({ type: 'assistant/chunk', data: { chunk: { type: 'usage', usage: { inputTokens: 5, outputTokens: 1, cacheReadTokens: 0, totalTokens: 6 } } } }),
@@ -102,20 +102,20 @@ function check(name, condition, detail = '') {
   check('sessionlog: the unversioned name counts as the oldest generation', sessionLogFile(legacyDir)?.version === 0)
   rmSync(legacyDir, { recursive: true, force: true })
 
-  const bothDir = mkdtempSync(join(tmpdir(), 'collab-both-session-'))
+  const bothDir = mkdtempSync(join(tmpdir(), 'magi-both-session-'))
   writeFileSync(join(bothDir, 'session.jsonl.zstd'), frame(legacy.events[0]))
   writeFileSync(join(bothDir, 'session.v4.jsonl.zstd'), frame(v4Event))
   check('sessionlog: the newest generation wins when both are present', sessionLogFile(bothDir)?.name === 'session.v4.jsonl.zstd')
   check('sessionlog: the winner is the one actually read', readSessionEvents(bothDir).events[0]?.type === 'assistant/message')
   rmSync(bothDir, { recursive: true, force: true })
 
-  const plainDir = mkdtempSync(join(tmpdir(), 'collab-plain-session-'))
+  const plainDir = mkdtempSync(join(tmpdir(), 'magi-plain-session-'))
   writeFileSync(join(plainDir, 'session.v4.jsonl'), `${JSON.stringify(v4Event)}\n${JSON.stringify({ type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })}\n`)
   const plain = readSessionEvents(plainDir)
   check('sessionlog: an uncompressed jsonl generation is read too', plain.events.length === 2, `got ${plain.events.length}`)
   rmSync(plainDir, { recursive: true, force: true })
 
-  const noiseDir = mkdtempSync(join(tmpdir(), 'collab-noise-session-'))
+  const noiseDir = mkdtempSync(join(tmpdir(), 'magi-noise-session-'))
   writeFileSync(join(noiseDir, 'session.lock'), '')
   writeFileSync(join(noiseDir, 'notes.txt'), 'not a session log')
   check('sessionlog: lock and unrelated files resolve to no log', sessionLogFile(noiseDir) === null)
@@ -188,7 +188,7 @@ function check(name, condition, detail = '') {
 }
 
 // --- isolated DSH_HOME -------------------------------------------------------
-const home = mkdtempSync(join(tmpdir(), 'collabridge-home-'))
+const home = mkdtempSync(join(tmpdir(), 'magi-home-'))
 process.env.DSH_HOME = home
 
 // Sessions must be looked up under the ACTIVE home. A hardcoded legacy home
@@ -241,7 +241,7 @@ const fakeCtx = {
 
 apply(fakeCtx)
 
-const discoveryFile = join(home, 'collab-bridge.json')
+const discoveryFile = join(home, 'magi.json')
 for (let i = 0; i < 200 && !existsSync(discoveryFile); i += 1) {
   await new Promise((r) => setTimeout(r, 25))
 }
@@ -251,7 +251,7 @@ const discovery = JSON.parse(readFileSync(discoveryFile, 'utf8'))
 check('plugin: discovery carries a loopback port', Number.isInteger(discovery.port) && discovery.port > 0)
 check('plugin: discovery carries a 64-hex token', /^[0-9a-f]{64}$/.test(discovery.token ?? ''))
 check('plugin: binds loopback only', discovery.host === '127.0.0.1')
-check('plugin: exports the cordis shape', name === 'collabridge' && Array.isArray(inject) && inject.includes('agents'))
+check('plugin: exports the cordis shape', name === 'magi' && Array.isArray(inject) && inject.includes('agents'))
 
 async function call(pathname, { method = 'GET', body, token = discovery.token } = {}) {
   const response = await fetch(`http://127.0.0.1:${discovery.port}${pathname}`, {
@@ -268,15 +268,15 @@ const textOf = (entry) => entry.message.content.map((block) => block.text ?? '')
 check('routing: workspace slug matches the session directory convention', routing.workspaceSlug(PROJECT) === slug(PROJECT))
 check('routing: normalises case and separators', routing.normaliseProject('D:\\Examples\\Demo\\') === 'd:/examples/demo')
 
-const inferred = routing.resolveCollabSession({ project: PROJECT })
+const inferred = routing.resolveMagiSession({ project: PROJECT })
 check('routing: infers the newest session when nothing is configured', inferred.session_id === 'session-inferred-0001', JSON.stringify(inferred))
 check('routing: marks inference as unconfigured', inferred.configured === false && inferred.resolved_by === 'newest-session-for-workspace')
 
-const unresolved = routing.resolveCollabSession({ project: 'D:\\Examples\\Nowhere' })
+const unresolved = routing.resolveMagiSession({ project: 'D:\\Examples\\Nowhere' })
 check('routing: never guesses an unresolved project', unresolved.session_id === null && unresolved.resolved_by === 'unresolved')
 
 routing.setRoute({ project: PROJECT, node: 'bridge-design', sessionId: 'session-live-0001' })
-const routed = routing.resolveCollabSession({ project: PROJECT })
+const routed = routing.resolveMagiSession({ project: PROJECT })
 check('routing: an explicit node route wins over inference', routed.session_id === 'session-live-0001' && routed.resolved_by === 'routes[bridge-design]')
 
 // --- naming a conversation instead of a route --------------------------------
@@ -313,7 +313,7 @@ writeSessionLog(alpha, [
     { type: 'user/message', data: { content: [{ type: 'text', text: '这句是用户说的' }] } },
   ],
   [
-    { type: 'user/message', data: { source: { kind: 'plugin:collabridge' }, content: [{ type: 'text', text: 'a relayed question, not the user' }] } },
+    { type: 'user/message', data: { source: { kind: 'plugin:magi' }, content: [{ type: 'text', text: 'a relayed question, not the user' }] } },
     { type: 'user/message', data: { content: [{ type: 'text', text: '开工吧' }] } },
   ],
 ])
@@ -392,45 +392,45 @@ check(
 )
 
 // --- choosing a conversation -------------------------------------------------
-const byExact = routing.resolveCollabSession({ project: NAMED_PROJECT, title: '示例项目维护' })
+const byExact = routing.resolveMagiSession({ project: NAMED_PROJECT, title: '示例项目维护' })
 check('select: an exact title resolves', byExact.session_id === 'session-alpha-0001' && byExact.resolved_by === 'title', JSON.stringify(byExact))
 check('select: an exact title is reported as exact', byExact.matched_exactly === true && byExact.matched_title === '示例项目维护')
 
-const byFragment = routing.resolveCollabSession({ project: NAMED_PROJECT, title: 'Ctrl+Enter' })
+const byFragment = routing.resolveMagiSession({ project: NAMED_PROJECT, title: 'Ctrl+Enter' })
 check('select: a unique fragment resolves and is marked inexact', byFragment.session_id === 'session-beta-0002' && byFragment.matched_exactly === false, JSON.stringify(byFragment))
 
-const byAmbiguous = routing.resolveCollabSession({ project: NAMED_PROJECT, title: '示例功能' })
+const byAmbiguous = routing.resolveMagiSession({ project: NAMED_PROJECT, title: '示例功能' })
 check('select: a fragment matching several conversations is refused', byAmbiguous.session_id === null && byAmbiguous.resolved_by === 'title-ambiguous', JSON.stringify(byAmbiguous))
 check('select: the refusal lists every match', (byAmbiguous.matches ?? []).length === 3, JSON.stringify(byAmbiguous.matches))
 check('select: every listed match carries a title', (byAmbiguous.matches ?? []).every((m) => typeof m.title === 'string' && m.title.length > 0))
 
-const byDuplicate = routing.resolveCollabSession({ project: NAMED_PROJECT, title: '示例功能的另一件事' })
+const byDuplicate = routing.resolveMagiSession({ project: NAMED_PROJECT, title: '示例功能的另一件事' })
 check('select: two conversations sharing a full title are refused', byDuplicate.session_id === null && byDuplicate.resolved_by === 'title-ambiguous', JSON.stringify(byDuplicate))
 
-const byNothing = routing.resolveCollabSession({ project: NAMED_PROJECT, title: '没有任何会话叫这个' })
+const byNothing = routing.resolveMagiSession({ project: NAMED_PROJECT, title: '没有任何会话叫这个' })
 check('select: an unmatched title is refused as unmatched', byNothing.session_id === null && byNothing.reason === 'title_not_found')
 check('select: the refusal lists every conversation with its title', (byNothing.sessions ?? []).some((s) => s.title === '示例项目维护'))
 check('select: the listed conversations carry the user\'s own line', (byNothing.sessions ?? []).some((s) => s.last_user_line === '开工吧'))
 
-const byId = routing.resolveCollabSession({ project: NAMED_PROJECT, session: 'session-gamma-0003' })
+const byId = routing.resolveMagiSession({ project: NAMED_PROJECT, session: 'session-gamma-0003' })
 check('select: a full session id resolves', byId.session_id === 'session-gamma-0003' && byId.resolved_by === 'session')
-const byPrefix = routing.resolveCollabSession({ project: NAMED_PROJECT, session: 'session-gamma' })
+const byPrefix = routing.resolveMagiSession({ project: NAMED_PROJECT, session: 'session-gamma' })
 check('select: a unique session id prefix resolves', byPrefix.session_id === 'session-gamma-0003')
-const byNoId = routing.resolveCollabSession({ project: NAMED_PROJECT, session: 'session-absent-9999' })
+const byNoId = routing.resolveMagiSession({ project: NAMED_PROJECT, session: 'session-absent-9999' })
 check('select: an unknown session id is refused', byNoId.session_id === null && byNoId.reason === 'session_not_in_workspace')
-const byBadPrefix = routing.resolveCollabSession({ project: NAMED_PROJECT, session: 'session-' })
+const byBadPrefix = routing.resolveMagiSession({ project: NAMED_PROJECT, session: 'session-' })
 check('select: an ambiguous session id prefix is refused', byBadPrefix.session_id === null && byBadPrefix.reason === 'session_prefix_ambiguous')
 
 routing.setRoute({ project: NAMED_PROJECT, node: 'parallel-a', sessionId: 'session-alpha-0001', current: false })
-const byLabel = routing.resolveCollabSession({ project: NAMED_PROJECT, node: 'parallel-a' })
+const byLabel = routing.resolveMagiSession({ project: NAMED_PROJECT, node: 'parallel-a' })
 check('select: a registered label resolves', byLabel.session_id === 'session-alpha-0001' && byLabel.resolved_by === 'routes[parallel-a]')
 const notCurrent = routing.loadRegistry().projects[routing.normaliseProject(NAMED_PROJECT)]
 check('select: labelling without --current leaves the project node alone', notCurrent.node === null, JSON.stringify(notCurrent.node))
-const byBadLabel = routing.resolveCollabSession({ project: NAMED_PROJECT, node: 'no-such-label' })
+const byBadLabel = routing.resolveMagiSession({ project: NAMED_PROJECT, node: 'no-such-label' })
 check('select: an unregistered label is refused', byBadLabel.session_id === null && byBadLabel.reason === 'node_not_routed')
 check('select: the refusal lists the registered labels', (byBadLabel.labels ?? []).includes('parallel-a'))
 
-const inferredStill = routing.resolveCollabSession({ project: NAMED_PROJECT })
+const inferredStill = routing.resolveMagiSession({ project: NAMED_PROJECT })
 check('select: no selector keeps the previous behaviour', inferredStill.resolved_by === 'newest-session-for-workspace', JSON.stringify(inferredStill))
 
 // --- the outbound side: finding a Codex thread by its title -------------------
@@ -440,7 +440,7 @@ check('select: no selector keeps the previous behaviour', inferredStill.resolved
 // an empty name before the new one is written.
 {
   const push = await import('../tools/transport/push-to-codex.mjs')
-  const codexHome = mkdtempSync(join(tmpdir(), 'collabridge-codex-'))
+  const codexHome = mkdtempSync(join(tmpdir(), 'magi-codex-'))
   const codexSessions = join(codexHome, 'sessions', '2026', '10', '05')
   mkdirSync(codexSessions, { recursive: true })
 
@@ -470,7 +470,7 @@ check('select: no selector keeps the previous behaviour', inferredStill.resolved
   // The index's timestamps are not all written at the same precision (the writer trims trailing
   // zeros), so the same second can appear as .283917 and .2839177. Compared as strings the first wins
   // because 'Z' sorts above '7', which served the title from BEFORE the rename.
-  const mixedHome = mkdtempSync(join(tmpdir(), 'collabridge-codex-mixed-'))
+  const mixedHome = mkdtempSync(join(tmpdir(), 'magi-codex-mixed-'))
   const mixedId = '66666666-6666-4666-8666-666666666666'
   mkdirSync(join(mixedHome, 'sessions', '2026', '10', '05'), { recursive: true })
   writeFileSync(
@@ -609,7 +609,7 @@ check('delivery: the live agent actually received a steer', entry?.mode === 'ste
 // for the session log — "format v4 message requires a producer-owned source kind" — and that
 // refusal lands AFTER admission, so the audit log recorded `admitted`, no byte reached the
 // session file, and the receiving conversation reported 本轮运行失败. Every check below fails
-// on that shape. `plugin:collabridge` is also what the V3→V4 migration writes for this
+// on that shape. `plugin:magi` is also what the V3→V4 migration writes for this
 // producer's older rows, so these pin injected text to one kind across the migration.
 const injectedSource = entry?.message?.source
 check('delivery: the message carries a source object', injectedSource !== null && typeof injectedSource === 'object')
@@ -620,8 +620,8 @@ check(
   typeof injectedSource?.kind === 'string' && injectedSource.kind.length > 0 && injectedSource.kind !== 'plugin',
   JSON.stringify(injectedSource),
 )
-check('delivery: the source kind is the one the migration writes for this producer', injectedSource?.kind === 'plugin:collabridge', JSON.stringify(injectedSource))
-check('delivery: the source still names the plugin for readers that look there', injectedSource?.plugin === 'collabridge')
+check('delivery: the source kind is the one the migration writes for this producer', injectedSource?.kind === 'plugin:magi', JSON.stringify(injectedSource))
+check('delivery: the source still names the plugin for readers that look there', injectedSource?.plugin === 'magi')
 
 const framing = textOf(entry)
 // ORDER, both directions: the relayed text IS the message, so it comes first; the marks that say
@@ -778,7 +778,7 @@ check('http: /route registers a route', routeResult.status === 200 && routeResul
 check('http: /routes exposes the registry', (await call('/routes')).status === 200)
 
 // Audit log
-const auditLines = readFileSync(join(home, 'collab-bridge.log.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+const auditLines = readFileSync(join(home, 'magi.log.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l))
 const admitted = auditLines.filter((l) => l.event === 'admitted')
 const refused = auditLines.filter((l) => l.event === 'refused')
 // Every delivery made above is recorded; the exact number follows the cases this suite runs, so the
@@ -828,47 +828,47 @@ const mcpResponses = await runMcp([
   { jsonrpc: '2.0', id: 2, method: 'tools/list' },
 ])
 check('mcp: initialize echoes the client protocol version', mcpResponses[0]?.result?.protocolVersion === '2025-06-18', JSON.stringify(mcpResponses[0]))
-check('mcp: initialize names the server', mcpResponses[0]?.result?.serverInfo?.name === 'dsh-collabridge')
+check('mcp: initialize names the server', mcpResponses[0]?.result?.serverInfo?.name === 'magi')
 check('mcp: a notification draws no response', mcpResponses.length === 2, `responses=${mcpResponses.length}`)
-check('mcp: tools/list exposes every tool', mcpResponses[1]?.result?.tools?.length === 3, JSON.stringify(mcpResponses[1]?.result?.tools?.map((t) => t.name)))
+check('mcp: tools/list exposes every tool', JSON.stringify(mcpResponses[1]?.result?.tools?.map(t => t.name).sort()) === JSON.stringify(['magi_ask_dsh', 'magi_dsh_review', 'magi_dsh_sessions', 'magi_message']), JSON.stringify(mcpResponses[1]?.result?.tools?.map((t) => t.name)))
 const tools = mcpResponses[1]?.result?.tools ?? []
-const tool = tools.find((t) => t.name === 'ask_dsh')
-const reviewTool = tools.find((t) => t.name === 'dsh_review')
-const sessionsTool = tools.find((t) => t.name === 'dsh_sessions')
-check('mcp: ask_dsh is exposed', Boolean(tool))
-check('mcp: dsh_review is exposed', Boolean(reviewTool))
-check('mcp: dsh_sessions is exposed', Boolean(sessionsTool))
+const tool = tools.find((t) => t.name === 'magi_ask_dsh')
+const reviewTool = tools.find((t) => t.name === 'magi_dsh_review')
+const sessionsTool = tools.find((t) => t.name === 'magi_dsh_sessions')
+check('mcp: magi_ask_dsh is exposed', Boolean(tool))
+check('mcp: magi_dsh_review is exposed', Boolean(reviewTool))
+check('mcp: magi_dsh_sessions is exposed', Boolean(sessionsTool))
 check(
-  'mcp: ask_dsh accepts the three selectors',
+  'mcp: magi_ask_dsh accepts the three selectors',
   ['title', 'node', 'session'].every((key) => Boolean(tool?.inputSchema?.properties?.[key])),
   JSON.stringify(Object.keys(tool?.inputSchema?.properties ?? {})),
 )
-check('mcp: dsh_sessions only needs a project', JSON.stringify(Object.keys(sessionsTool?.inputSchema?.properties ?? {})) === '["project"]')
-check('mcp: ask_dsh requires project and question', tool?.inputSchema?.required?.join(',') === 'project,question')
-check('mcp: ask_dsh rejects extra fields at the schema level', tool?.inputSchema?.additionalProperties === false)
-check('mcp: the ask_dsh description warns against rewording', /逐字|不要改写/.test(tool?.description ?? ''))
+check('mcp: magi_dsh_sessions only needs a project', JSON.stringify(Object.keys(sessionsTool?.inputSchema?.properties ?? {})) === '["project"]')
+check('mcp: magi_ask_dsh requires project and question', tool?.inputSchema?.required?.join(',') === 'project,question')
+check('mcp: magi_ask_dsh rejects extra fields at the schema level', tool?.inputSchema?.additionalProperties === false)
+check('mcp: the magi_ask_dsh description warns against rewording', /逐字|不要改写/.test(tool?.description ?? ''))
 
-// The consultation contract: ask_dsh is a discussion channel, so the description has to say when to
+// The consultation contract: magi_ask_dsh is a discussion channel, so the description has to say when to
 // use it, what to put in the question, and what its answer is worth. A bare "is X right?" wastes the
 // exchange, and asking at the decision point means the reply arrives after the choice is committed.
 const askDescription = tool?.description ?? ''
-check('mcp: ask_dsh states it is fire-and-forget', /受理后立即返回/.test(askDescription))
-check('mcp: ask_dsh says to ask early, not at the decision point', /尽早提问/.test(askDescription))
-check('mcp: ask_dsh asks for the fixed constraints', /固定约束/.test(askDescription))
-check('mcp: ask_dsh asks for options already rejected', /已经考虑并排除的方案/.test(askDescription))
-check('mcp: ask_dsh asks for the pending decision', /尚待决定的事项/.test(askDescription))
-check('mcp: ask_dsh asks which premise to attack', /最应质疑的前提/.test(askDescription))
-check('mcp: ask_dsh warns that its answer is hypotheses, not conclusions', /待验证假设/.test(askDescription))
-check('mcp: ask_dsh says it cannot close a checkpoint', /不能据此关闭检查点/.test(askDescription))
+check('mcp: magi_ask_dsh states it is fire-and-forget', /受理后立即返回/.test(askDescription))
+check('mcp: magi_ask_dsh says to ask early, not at the decision point', /尽早提问/.test(askDescription))
+check('mcp: magi_ask_dsh asks for the fixed constraints', /固定约束/.test(askDescription))
+check('mcp: magi_ask_dsh asks for options already rejected', /已经考虑并排除的方案/.test(askDescription))
+check('mcp: magi_ask_dsh asks for the pending decision', /尚待决定的事项/.test(askDescription))
+check('mcp: magi_ask_dsh asks which premise to attack', /最应质疑的前提/.test(askDescription))
+check('mcp: magi_ask_dsh warns that its answer is hypotheses, not conclusions', /待验证假设/.test(askDescription))
+check('mcp: magi_ask_dsh says it cannot close a checkpoint', /不能据此关闭检查点/.test(askDescription))
 check('mcp: the question field description carries the same brief', /已经排除的方案/.test(tool?.inputSchema?.properties?.question?.description ?? ''))
 
-// dsh_review's schema is the four-stage contract, so assert it rather than assume it.
-check('mcp: dsh_review requires the package fields', reviewTool?.inputSchema?.required?.join(',') === 'project,stage,objective,obligations,evidence')
-check('mcp: dsh_review restricts the stage set', reviewTool?.inputSchema?.properties?.stage?.enum?.join(',') === 'PHASE0,RED,GREEN,FINAL')
-check('mcp: dsh_review rejects extra fields at the schema level', reviewTool?.inputSchema?.additionalProperties === false)
-check('mcp: dsh_review obligations carry id and clause', reviewTool?.inputSchema?.properties?.obligations?.items?.required?.join(',') === 'id,clause')
-check('mcp: dsh_review tells the caller the evidence is its own claim', /调用方声明/.test(reviewTool?.description ?? ''))
-check('mcp: dsh_review tells the caller findings are untrusted', /不可信输入/.test(reviewTool?.description ?? ''))
+// magi_dsh_review's schema is the four-stage contract, so assert it rather than assume it.
+check('mcp: magi_dsh_review requires the package fields', reviewTool?.inputSchema?.required?.join(',') === 'project,stage,objective,obligations,evidence')
+check('mcp: magi_dsh_review restricts the stage set', reviewTool?.inputSchema?.properties?.stage?.enum?.join(',') === 'PHASE0,RED,GREEN,FINAL')
+check('mcp: magi_dsh_review rejects extra fields at the schema level', reviewTool?.inputSchema?.additionalProperties === false)
+check('mcp: magi_dsh_review obligations carry id and clause', reviewTool?.inputSchema?.properties?.obligations?.items?.required?.join(',') === 'id,clause')
+check('mcp: magi_dsh_review tells the caller the evidence is its own claim', /调用方声明/.test(reviewTool?.description ?? ''))
+check('mcp: magi_dsh_review tells the caller findings are untrusted', /不可信输入/.test(reviewTool?.description ?? ''))
 
 // Budgets appear twice: once as prose the caller reads, once as the number the bridge enforces.
 // They drifted apart once (the text promised a 420 s default while the code used 600 s) and a
@@ -908,11 +908,11 @@ check('mcp: dsh_review tells the caller findings are untrusted', /不可信输�
 // Input validation must fail locally, before any reviewer is spawned and any cost incurred.
 const badReview = await runMcp([
   { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
-  { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'dsh_review', arguments: { project: PROJECT, stage: 'GREEN' } } },
+  { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'magi_dsh_review', arguments: { project: PROJECT, stage: 'GREEN' } } },
 ])
 const badReviewText = badReview.find((r) => r.id === 2)?.result?.content?.[0]?.text ?? ''
-check('mcp: dsh_review rejects an incomplete package', badReview.find((r) => r.id === 2)?.result?.isError === true)
-check('mcp: dsh_review names every missing field', ['objective', 'obligations', 'evidence'].every((f) => badReviewText.includes(f)), badReviewText)
+check('mcp: magi_dsh_review rejects an incomplete package', badReview.find((r) => r.id === 2)?.result?.isError === true)
+check('mcp: magi_dsh_review names every missing field', ['objective', 'obligations', 'evidence'].every((f) => badReviewText.includes(f)), badReviewText)
 
 const badStage = await runMcp([
   { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
@@ -921,12 +921,12 @@ const badStage = await runMcp([
     id: 2,
     method: 'tools/call',
     params: {
-      name: 'dsh_review',
+      name: 'magi_dsh_review',
       arguments: { project: PROJECT, stage: 'ALPHA', objective: 'a long enough objective', obligations: [{ id: 'OB-A', clause: 'x' }], evidence: 'e' },
     },
   },
 ])
-check('mcp: dsh_review rejects an unknown stage', (badStage.find((r) => r.id === 2)?.result?.content?.[0]?.text ?? '').includes('stage must be'))
+check('mcp: magi_dsh_review rejects an unknown stage', (badStage.find((r) => r.id === 2)?.result?.content?.[0]?.text ?? '').includes('stage must be'))
 
 const missingRoot = await runMcp([
   { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
@@ -935,12 +935,12 @@ const missingRoot = await runMcp([
     id: 2,
     method: 'tools/call',
     params: {
-      name: 'dsh_review',
+      name: 'magi_dsh_review',
       arguments: { project: join(home, 'does-not-exist'), stage: 'GREEN', objective: 'a long enough objective', obligations: [{ id: 'OB-A', clause: 'x' }], evidence: 'e', test_command: 'x' },
     },
   },
 ])
-check('mcp: dsh_review refuses a candidate root that does not exist', (missingRoot.find((r) => r.id === 2)?.result?.content?.[0]?.text ?? '').includes('does not exist'))
+check('mcp: magi_dsh_review refuses a candidate root that does not exist', (missingRoot.find((r) => r.id === 2)?.result?.content?.[0]?.text ?? '').includes('does not exist'))
 
 // A GREEN verdict without a runnable test command is not evidence, so it is refused locally.
 const greenWithoutCommand = await runMcp([
@@ -950,13 +950,13 @@ const greenWithoutCommand = await runMcp([
     id: 2,
     method: 'tools/call',
     params: {
-      name: 'dsh_review',
+      name: 'magi_dsh_review',
       arguments: { project: PROJECT, stage: 'GREEN', objective: 'a long enough objective', obligations: [{ id: 'OB-A', clause: 'x' }], evidence: 'claim of a passing suite' },
     },
   },
 ])
 const greenText = greenWithoutCommand.find((r) => r.id === 2)?.result?.content?.[0]?.text ?? ''
-check('mcp: dsh_review refuses GREEN without test_command', greenWithoutCommand.find((r) => r.id === 2)?.result?.isError === true && greenText.includes('test_command'), greenText)
+check('mcp: magi_dsh_review refuses GREEN without test_command', greenWithoutCommand.find((r) => r.id === 2)?.result?.isError === true && greenText.includes('test_command'), greenText)
 
 const phase0WithoutCommand = await runMcp([
   { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
@@ -965,7 +965,7 @@ const phase0WithoutCommand = await runMcp([
     id: 2,
     method: 'tools/call',
     params: {
-      name: 'dsh_review',
+      name: 'magi_dsh_review',
       arguments: { project: PROJECT, stage: 'PHASE0', objective: 'a long enough objective', obligations: [{ id: 'OB-A', clause: 'x' }], evidence: 'design text' },
     },
   },
@@ -982,7 +982,7 @@ check('mcp: an unknown tool is rejected', (unknownTool.find((r) => r.id === 2)?.
 // Live call through the MCP wrapper, with the bridge running in this process
 const callResponses = await runMcp([
   { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18' } },
-  { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'ask_dsh', arguments: { project: PROJECT, question: 'via MCP' } } },
+  { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'magi_ask_dsh', arguments: { project: PROJECT, question: 'via MCP' } } },
 ])
 const callResult = callResponses.find((r) => r.id === 2)?.result
 check('mcp: a live tool call succeeds', callResult?.isError === undefined, JSON.stringify(callResult))
@@ -991,11 +991,11 @@ check('mcp: the result says not to wait inline', /do not wait for it inline/i.te
 check('mcp: the question reached the live agent', liveAgent.received.at(-1) && textOf(liveAgent.received.at(-1)).includes('via MCP'))
 
 // An unreachable plugin must be reported as a tool error, not a transport failure
-const missingHome = mkdtempSync(join(tmpdir(), 'collabridge-missing-'))
+const missingHome = mkdtempSync(join(tmpdir(), 'magi-missing-'))
 const offline = await runMcp(
   [
     { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
-    { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'ask_dsh', arguments: { project: PROJECT, question: 'x' } } },
+    { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'magi_ask_dsh', arguments: { project: PROJECT, question: 'x' } } },
   ],
   { DSH_HOME: missingHome },
 )
@@ -1021,5 +1021,5 @@ if (failures.length > 0) {
   for (const failure of failures) console.log(`  - ${failure}`)
   process.exitCode = 1
 } else {
-  console.log('all collaboration-bridge checks passed')
+  console.log('all magi checks passed')
 }

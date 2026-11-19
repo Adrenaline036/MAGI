@@ -13,7 +13,7 @@ DSH 宿主插件运行在应用的可信组合内部，通过会话 API 投递�
 
 ## 讨论投递
 
-`lib/index.js` 负责 HTTP 接口、定位、接纳和审计。入站消息使用 `plugin:collabridge` 来源，包含独立生成的消息 ID 和角色信息；原文放在前面，来源与投递信息放在尾部。
+`lib/index.js` 负责 HTTP 接口、定位、接纳和审计。入站消息使用 `plugin:magi` 来源，包含独立生成的消息 ID 和角色信息；原文放在前面，来源与投递信息放在尾部。
 
 DSH 的 `steer` 进入 `next-step`，供当前回合在下一步边界读取，空闲时会唤醒驱动；`followup` 进入 `next-turn`，等当前回合结束；`inject` 进入待处理上下文但不唤醒。关闭的目标会话会被拒绝，桥不会代替用户打开它。
 
@@ -41,10 +41,10 @@ DSH 的 `steer` 进入 `next-step`，供当前回合在下一步边界读取，�
 
 | 数据 | 路径或用途 |
 |---|---|
-| 宿主发现文件 | `$DSH_HOME/collab-bridge.json`，包含端口、进程和访问令牌。 |
-| 接纳审计 | `$DSH_HOME/collab-bridge.log.jsonl`。 |
-| 项目路由 | `$DSH_HOME/collab-routing.json`，可通过 `DSH_COLLAB_ROUTING` 指定。 |
-| 桌面端点 | `$CODEX_HOME/collabridge-desktop-targets/<线程 UUID>/`。 |
+| 宿主发现文件 | `$DSH_HOME/magi.json`，包含端口、进程和访问令牌。 |
+| 接纳审计 | `$DSH_HOME/magi.log.jsonl`。 |
+| 项目路由 | `$DSH_HOME/magi-routing.json`，可通过 `MAGI_ROUTING` 指定。 |
+| 桌面端点 | `$CODEX_HOME/magi-desktop-targets/<线程 UUID>/`。 |
 | 审查证据 | `$DSH_HOME/reviews/<审查包 ID>/`。 |
 
 这些数据不属于发布内容。发现文件只反映当前运行实例，不能长期缓存端口、进程号或令牌。

@@ -1,8 +1,8 @@
 {
-  "name": "dsh-collabridge",
-  "version": "0.9.0",
+  "name": "magi",
+  "version": "0.10.0",
   "private": true,
-  "description": "连接 Codex 与 DeepSeek Harness 既有会话，支持双向引导投递、会话定位和独立代码外审",
+  "description": "连接 Codex、DSH 与 Antigravity 的指定会话，支持定向消息、广播通知和 DSH 独立代码外审",
   "keywords": [
     "deepseek-harness",
     "dsh",
@@ -10,7 +10,8 @@
     "mcp",
     "codex",
     "agent-collaboration",
-    "code-review"
+    "code-review",
+    "antigravity"
   ],
   "homepage": "https://github.com/Adrenaline036/Collabridge#readme",
   "repository": {
@@ -21,6 +22,9 @@
     "url": "https://github.com/Adrenaline036/Collabridge/issues"
   },
   "type": "module",
+  "bin": {
+    "magi-message": "./lib/message.mjs"
+  },
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
@@ -39,7 +43,8 @@
     "README.md",
     "ARCHITECTURE.md",
     "OPERATIONS.md",
-    "LICENSE"
+    "LICENSE",
+    "tools/setup-antigravity.py"
   ],
   "license": "MIT"
 }
