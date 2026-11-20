@@ -13,13 +13,13 @@
     "code-review",
     "antigravity"
   ],
-  "homepage": "https://github.com/Adrenaline036/Collabridge#readme",
+  "homepage": "https://github.com/Adrenaline036/MAGI#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Adrenaline036/Collabridge.git"
+    "url": "git+https://github.com/Adrenaline036/MAGI.git"
   },
   "bugs": {
-    "url": "https://github.com/Adrenaline036/Collabridge/issues"
+    "url": "https://github.com/Adrenaline036/MAGI/issues"
   },
   "type": "module",
   "bin": {
