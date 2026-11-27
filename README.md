@@ -51,7 +51,7 @@ DSH 回推默认通过 Codex 桌面的 `send_message_to_thread` 入口发送。�
 4. 在 DSH 打开目标会话，用 `magi_dsh_sessions` 核对后，通过 `session`、`node` 或 `title` 定位。
 5. 检查目标 DSH 日志和 Codex 线程里的实际入站正文，完成双向验收。
 
-Antigravity 工作区组件和 Sidecar 的安装见 [运行说明](OPERATIONS.md)。
+Windows 原生 Sidecar 的连接要求和定向发送命令见 [运行说明](OPERATIONS.md)。
 
 ## 会话定位
 

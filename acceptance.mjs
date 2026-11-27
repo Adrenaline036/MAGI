@@ -30,7 +30,7 @@ for(let i=0;i<100 && !fs.existsSync(discovery);i++) await new Promise(resolve=>s
 const cfg=JSON.parse(fs.readFileSync(discovery))
 const health=await (await fetch('http://127.0.0.1:'+cfg.port+'/health')).json()
 assert.equal(health.plugin,'magi')
-assert.equal(health.version,'0.10.0')
+assert.equal(health.version, JSON.parse(fs.readFileSync(path.join(dir, 'package.json'))).version)
 const from='codex/'+randomUUID()
 const {routeMessage}=await load('message.mjs')
 const receipt=await routeMessage({from,to:'dsh/'+id,text:'候选包回归',project})

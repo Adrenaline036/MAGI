@@ -123,33 +123,28 @@ node test/review-bridge.test.mjs
 
 ## 三端定向消息
 
-在 MAGI 开发目录中，Codex 与 DSH 可通过命令行发给一个指定会话。目标和来源均使用完整地址，形式为 `codex/<线程 UUID>`、`dsh/session-<会话 UUID>` 或 `antigravity/<会话 UUID>`。首次发往 DSH 或由 DSH 发起时需提供其工作区路径。开发版 MCP 提供相同语义的 `magi_message`，参数为 `text`、`to` 或 `replyTo`，以及按需填写的 `from`、`project`。
+DSH 使用当前 profile 安装的 `magi-message` 命令向指定会话发信。完整目标地址从当前工作区的绑定或组成员记录读取。Codex 的 `magi_message` 工具接受相同的目标地址。
 
 ```text
-node lib/message.mjs send <目标地址> "<正文>" <来源地址> [DSH工作区]
-node lib/message.mjs reply <原消息UUID> "<正文>" <本会话地址>
+magi-message send <目标地址> "<正文>" <本会话地址> <DSH工作区>
+magi-message reply <原消息UUID> "<正文>" <本会话地址>
 ```
 
-Antigravity 使用 MAGI 工作区内的 Python 入口，参数顺序与上面相同。正式版中一次启用「MAGI 会话路由」后，Sidecar 负责按会话投递，同时转交工作区的出站请求。
+Windows 桌面 profile 的命令位于其 `node_modules/.bin/magi-message.cmd`。DSH 的工具进程使用宿主提供的 `DSH_SESSION_ID` 识别来源；显式声明的来源须与实际会话一致。Codex MCP 请求使用请求携带的线程标识。
 
-```text
-python3 .agents/magi/antigravity-message.py send <目标地址> "<正文>" <本会话地址> [DSH工作区]
-python3 .agents/magi/antigravity-message.py reply <原消息UUID> "<正文>" <本会话地址>
-```
+Windows 原生投递需要预先配置的 Antigravity Sidecar 和用户级发件钩子。MAGI 从用户主目录的 `.magi/antigravity-windows.json` 读取 `python`、`transport`、`helper` 和已登记的 `sessions`。前三项分别是 Windows Python 可执行文件、Sidecar 客户端脚本和回信脚本的路径。只向已登记的会话投递；缺少配置或目标时停止。这个版本包更新 DSH 和 Codex 的发送入口，沿用用户已有的 Windows Sidecar 安装。
 
-每封入站消息末尾附有对应的回复命令。收件人可替换正文直接回信，MAGI 从原消息记录中读取回程地址。Windows 用户目录下的 `.magi/messages` 保留路由数据。Antigravity 工作区需启用「MAGI 发件来源核验」钩子。请单独执行一条 Python 发件命令。宿主完成工具调用时，钩子核对实际会话 ID 与命令来源。派发前，入口还会核实该会话对应步号的命令和输出摘要。同一步只可派发一次。该校验适用于同一用户控制的可信本机和工作区。
-
-Antigravity 请求的本地回执保存在 `.agents/magi/outbox/<请求UUID>.result`。登记后，转交进程会记录一次派发尝试。遇到宿主中断或回执不明时，先用消息编号和正文核对目标会话入站，再决定是否重发。
+收件会话使用来信附带的命令回复原发送方。Antigravity 通过独立的 `run_command` 执行回信命令，宿主钩子核验来源。在原收件会话核对入站正文后确认送达。
 
 ## 广播通知
 
-在 MAGI 开发入口执行 `node lib/message.mjs broadcast <组名> "<正文>" <本会话地址>`。Antigravity 在工作区执行 `python3 .agents/magi/antigravity-message.py broadcast <组名> "<正文>" <本会话地址>`。开发版 MCP 工具 `magi_message` 可传入 `group` 与 `text`，宿主未提供会话地址时另传 `from`。
+Codex 可使用 `magi_message` 的 `group` 和 `text` 参数；DSH 使用同一入口的 `broadcast` 子命令。
 
 组定义位于 Windows 用户目录的 `.magi/groups/<组名>.json`。组名使用小写字母、数字和连字符。`members` 数组分别绑定三个客户端的完整会话地址，`project` 指向 DSH 会话的工作区。成员发出一条通知后，另外两个成员各收到一份。两份共用广播编号，各有自己的回复命令，普通回复只回原发送会话。
 
 广播清单和逐目标回执位于 `.magi/messages`，文件后缀分别为 `.broadcast.json` 与 `.broadcast-result.json`。回执中的 `accepted` 表示目标宿主已受理；一端状态不明时，按广播编号查该端入站记录，避免重复广播。
 
-## 安装 Antigravity 组件
+## 旧版 WSL 工作区组件
 
 在 WSL Ubuntu 中使用包内的 `tools/setup-antigravity.py`，依次传入 Antigravity 实际挂载的工作区绝对路径、一个新的配置准备目录。脚本校验并准备工作区 Python 入口、工具钩子和 Sidecar 描述；在准备目录的清单中查看每个目标位置。在停机窗口备份已有配置，将钩子项合并至工作区的 `.agents/hooks.json`，将 Sidecar 描述安装到用户配置中对应的 magi-router 目录。其他钩子和 Sidecar 保持各自配置。首次在界面启用「MAGI 会话路由」。同一实例使用一个绑定工作区，测试及升级后保持其路径稳定。
 

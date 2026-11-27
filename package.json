@@ -1,6 +1,6 @@
 {
   "name": "magi",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "private": true,
   "description": "连接 Codex、DSH 与 Antigravity 的指定会话，支持定向消息、广播通知和 DSH 独立代码外审",
   "keywords": [
